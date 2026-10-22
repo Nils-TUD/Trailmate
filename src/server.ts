@@ -9,7 +9,7 @@ const server: Plugin = async ({ client, directory }) => {
 
     let previous: Decision | undefined;
 
-    // The TUI or CLI may change the preference while the server remains running.
+    // The TUI may change the preference while the server remains running.
     const refresh = async () => {
         try {
             const decision = await readDecision(repository);
@@ -23,9 +23,7 @@ const server: Plugin = async ({ client, directory }) => {
                 body: {
                     service: "opencode-auto-attr",
                     level: "info",
-                    message:
-                        `Repository attribution preference: ${decision} ` +
-                        "(phase 1; collection pending)",
+                    message: `Repository attribution preference: ${decision} (collection pending)`,
                 },
             });
         } catch (error) {

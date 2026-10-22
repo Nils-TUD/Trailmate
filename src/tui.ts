@@ -1,8 +1,10 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
 import { OptIn, type Choice } from "./opt-in.js";
 import type { Repository } from "./repository.js";
+import { registerManagement } from "./management.js";
 
 const tui: TuiPlugin = async (api) => {
+    registerManagement(api);
     const optIn = new OptIn();
     // Avoid repeating the same operational error on every polling tick.
     const failed = new Set<string>();

@@ -6,9 +6,9 @@ const execute = promisify(execFile);
 
 export interface Repository {
     root: string;
-    // Worktree-local metadata; model sets will be stored here.
+    // Worktree-local Git metadata.
     gitDir: string;
-    // Shared metadata; linked worktrees use the same opt-in preference.
+    // Shared metadata; all plugin state lives here, with models keyed by root.
     commonDir: string;
 }
 

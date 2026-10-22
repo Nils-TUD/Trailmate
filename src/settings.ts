@@ -1,66 +1,125 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import type { Repository } from "./repository.js";
 
 export type Decision = "unknown" | "enabled" | "disabled";
+type Settings = Record<string, unknown> & {
+    version: 1;
+    enabled: boolean | null;
+    models: Record<string, string[]>;
+};
 
 export function settingsPath(repository: Repository): string {
     return path.join(repository.commonDir, "opencode-attribution", "settings.json");
 }
 
-export async function readDecision(repository: Repository): Promise<Decision> {
+function isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readSettings(repository: Repository): Promise<Settings> {
     const file = settingsPath(repository);
-    let contents: string;
-
+    let contents: Buffer;
     try {
-        contents = await readFile(file, "utf8");
+        contents = await readFile(file);
     } catch (error) {
-        // A missing file is the only case that means the user has not decided.
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return "unknown";
-
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+            return { version: 1, enabled: null, models: {} };
+        }
         throw error;
     }
 
     try {
-        const settings: unknown = JSON.parse(contents);
-
-        // Reject incompatible or damaged files rather than prompting again and
-        // potentially overwriting an existing decision.
+        const settings: unknown = JSON.parse(
+            new TextDecoder("utf-8", { fatal: true }).decode(contents),
+        );
         if (
-            typeof settings !== "object" ||
-            settings === null ||
-            !("version" in settings) ||
+            !isObject(settings) ||
             settings.version !== 1 ||
-            !("enabled" in settings) ||
-            typeof settings.enabled !== "boolean"
+            (settings.enabled !== null && typeof settings.enabled !== "boolean")
         ) {
-            throw new Error("expected version 1 and a boolean enabled field");
+            throw new Error("expected version 1 and a boolean or null enabled field");
         }
 
-        return settings.enabled ? "enabled" : "disabled";
+        // Accept the preference-only files written by phase 1.
+        const models = settings.models === undefined ? {} : settings.models;
+        if (
+            !isObject(models) ||
+            Object.values(models).some(
+                (values) =>
+                    !Array.isArray(values) || values.some((value) => typeof value !== "string"),
+            )
+        ) {
+            throw new Error("expected a worktree-to-models map containing arrays of strings");
+        }
+        return { ...settings, models } as Settings;
     } catch (error) {
         throw new Error(`Invalid attribution settings at ${file}`, { cause: error });
     }
 }
 
-export async function writeDecision(repository: Repository, enabled: boolean): Promise<void> {
+async function updateSettings(
+    repository: Repository,
+    change: (settings: Settings) => void,
+): Promise<void> {
     const file = settingsPath(repository);
-
     await mkdir(path.dirname(file), { recursive: true });
 
-    // Write beside the destination so rename publishes a complete file on the
-    // same filesystem. Readers never observe a partially written JSON document.
-    const temporary = `${file}.${randomUUID()}.tmp`;
+    // The server and TUI can be separate processes. Serialize the whole
+    // read/modify/write so changing one worktree cannot undo another's update.
+    const lockFile = `${file}.lock`;
+    const deadline = Date.now() + 2000;
+    let lock;
+    while (!lock) {
+        try {
+            lock = await open(lockFile, "wx", 0o600);
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+            if (Date.now() >= deadline)
+                throw new Error(`Timed out waiting for attribution lock: ${lockFile}`);
+            await delay(25);
+        }
+    }
 
+    const temporary = `${file}.${randomUUID()}.tmp`;
     try {
-        await writeFile(temporary, `${JSON.stringify({ version: 1, enabled }, null, 2)}\n`, {
+        const settings = await readSettings(repository);
+        change(settings);
+        await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
             flag: "wx",
             mode: 0o600,
         });
         await rename(temporary, file);
     } finally {
-        // Also remove the temporary file if writing or publishing failed.
-        await rm(temporary, { force: true });
+        try {
+            await rm(temporary, { force: true });
+        } finally {
+            await lock.close();
+            await rm(lockFile);
+        }
     }
+}
+
+export async function readDecision(repository: Repository): Promise<Decision> {
+    const { enabled } = await readSettings(repository);
+    return enabled === null ? "unknown" : enabled ? "enabled" : "disabled";
+}
+
+export async function writeDecision(repository: Repository, enabled: boolean): Promise<void> {
+    await updateSettings(repository, (settings) => {
+        settings.enabled = enabled;
+    });
+}
+
+export async function readModels(repository: Repository): Promise<string[]> {
+    const settings = await readSettings(repository);
+    return [...new Set(settings.models[repository.root] ?? [])].sort();
+}
+
+export async function clearModels(repository: Repository): Promise<void> {
+    await updateSettings(repository, (settings) => {
+        delete settings.models[repository.root];
+    });
 }
