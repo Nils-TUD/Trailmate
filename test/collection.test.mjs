@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import { createCollector } from "../dist/collection.js";
@@ -10,7 +12,7 @@ import { clearModels, readModels, settingsPath, writeDecision } from "../dist/se
 const execute = promisify(execFile);
 
 async function fixture(t) {
-    const root = await mkdtemp("/tmp/opencode/trailmate-collection-");
+    const root = await mkdtemp(path.join(tmpdir(), "trailmate-collection-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     await execute("git", ["-C", root, "init", "-q"]);
     const repository = await discoverRepository(root);

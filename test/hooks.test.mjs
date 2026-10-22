@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
@@ -31,7 +32,7 @@ const hookFile = async (root) =>
     ).stdout.replace(/\n$/, "");
 
 async function fixture(t, separate = false) {
-    const directory = await mkdtemp("/tmp/opencode/trailmate-hooks-");
+    const directory = await mkdtemp(path.join(tmpdir(), "trailmate-hooks-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const root = path.join(directory, "repository's files with spaces");
     await mkdir(root);

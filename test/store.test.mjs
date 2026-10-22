@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
@@ -18,7 +19,7 @@ const execute = promisify(execFile);
 const git = (cwd, ...args) => execute("git", ["-C", cwd, ...args]);
 
 async function fixture(t) {
-    const directory = await mkdtemp("/tmp/opencode/trailmate-store-");
+    const directory = await mkdtemp(path.join(tmpdir(), "trailmate-store-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const root = path.join(directory, "repository with spaces");
     await mkdir(root);
