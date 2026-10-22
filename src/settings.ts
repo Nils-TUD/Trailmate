@@ -3,9 +3,10 @@ import { mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import type { Repository } from "./repository.js";
+import { configureHooks, hookStatus } from "./hooks.js";
 
 export type Decision = "unknown" | "enabled" | "disabled";
-type Settings = Record<string, unknown> & {
+export type Settings = Record<string, unknown> & {
     version: 1;
     enabled: boolean | null;
     models: Record<string, string[]>;
@@ -62,7 +63,7 @@ async function readSettings(repository: Repository): Promise<Settings> {
 
 async function updateSettings(
     repository: Repository,
-    change: (settings: Settings) => void,
+    change: (settings: Settings, publish: () => Promise<void>) => void | Promise<void>,
 ): Promise<void> {
     const file = settingsPath(repository);
     await mkdir(path.dirname(file), { recursive: true });
@@ -86,12 +87,15 @@ async function updateSettings(
     const temporary = `${file}.${randomUUID()}.tmp`;
     try {
         const settings = await readSettings(repository);
-        change(settings);
-        await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
-            flag: "wx",
-            mode: 0o600,
-        });
-        await rename(temporary, file);
+        const publish = async () => {
+            await writeFile(temporary, `${JSON.stringify(settings, null, 2)}\n`, {
+                flag: "wx",
+                mode: 0o600,
+            });
+            await rename(temporary, file);
+        };
+        await change(settings, publish);
+        await publish();
     } finally {
         try {
             await rm(temporary, { force: true });
@@ -108,8 +112,21 @@ export async function readDecision(repository: Repository): Promise<Decision> {
 }
 
 export async function writeDecision(repository: Repository, enabled: boolean): Promise<void> {
+    await updateSettings(repository, async (settings, publish) => {
+        await configureHooks(repository, settings, enabled, publish);
+    });
+}
+
+export async function readHookStatus(repository: Repository): Promise<string> {
+    return hookStatus(repository, await readSettings(repository));
+}
+
+export async function addModel(repository: Repository, model: string): Promise<void> {
     await updateSettings(repository, (settings) => {
-        settings.enabled = enabled;
+        if (settings.enabled !== true) return;
+        settings.models[repository.root] = [
+            ...new Set([...(settings.models[repository.root] ?? []), model]),
+        ].sort();
     });
 }
 

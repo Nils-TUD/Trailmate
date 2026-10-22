@@ -20,7 +20,7 @@
         "opencode": ">=1.18.4 <2"
     },
     "scripts": {
-        "build": "tsc",
+        "build": "tsc && cp src/hook.py dist/hook.py",
         "check": "tsc --noEmit",
         "format": "prettier --write .",
         "format:check": "prettier --check .",

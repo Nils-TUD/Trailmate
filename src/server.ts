@@ -1,11 +1,13 @@
 import type { Plugin, PluginModule } from "@opencode-ai/plugin";
 import { discoverRepository } from "./repository.js";
 import { readDecision, type Decision } from "./settings.js";
+import { createCollector } from "./collection.js";
 
 const server: Plugin = async ({ client, directory }) => {
     const repository = await discoverRepository(directory);
 
     if (!repository) return {};
+    const collector = createCollector(repository, client);
 
     let previous: Decision | undefined;
 
@@ -23,7 +25,7 @@ const server: Plugin = async ({ client, directory }) => {
                 body: {
                     service: "opencode-auto-attr",
                     level: "info",
-                    message: `Repository attribution preference: ${decision} (collection pending)`,
+                    message: `Repository attribution preference: ${decision}`,
                 },
             });
         } catch (error) {
@@ -41,9 +43,25 @@ const server: Plugin = async ({ client, directory }) => {
     await refresh();
 
     return {
-        "tool.execute.before": refresh,
+        config: async (config) => {
+            if (config.snapshot === false) {
+                await client.app.log({
+                    body: {
+                        service: "opencode-auto-attr",
+                        level: "warn",
+                        message:
+                            "AI attribution needs OpenCode snapshots to receive file-changing patch events; snapshot is disabled.",
+                    },
+                });
+            }
+        },
+        "tool.execute.before": async () => {
+            await refresh();
+            await collector.flush();
+        },
         event: async ({ event }) => {
             if (event.type === "session.created") await refresh();
+            await collector.event(event);
         },
     };
 };

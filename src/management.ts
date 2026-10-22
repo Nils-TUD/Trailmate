@@ -1,6 +1,12 @@
 import type { TuiPlugin } from "@opencode-ai/plugin/tui";
 import { discoverRepository } from "./repository.js";
-import { clearModels, readDecision, readModels, writeDecision } from "./settings.js";
+import {
+    clearModels,
+    readDecision,
+    readHookStatus,
+    readModels,
+    writeDecision,
+} from "./settings.js";
 
 type Api = Parameters<TuiPlugin>[0];
 const actions = ["status", "enable", "disable", "list", "clear"] as const;
@@ -37,7 +43,7 @@ export function registerManagement(api: Api): void {
                     const models = (await readModels(repository)).join("\n") || "(no models)";
                     result =
                         action === "status"
-                            ? `Attribution: ${await readDecision(repository)}\nRepository: ${repository.root}\n${models}`
+                            ? `Attribution: ${await readDecision(repository)}\nRepository: ${repository.root}\nHook: ${await readHookStatus(repository)}\n${models}`
                             : models;
                 }
                 if (!api.lifecycle.signal.aborted && api.state.path.directory === directory) {

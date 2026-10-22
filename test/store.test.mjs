@@ -146,7 +146,12 @@ test("concurrent decisions publish complete settings and leave no temporary file
     ]);
     assert.ok(["enabled", "disabled"].includes(await readDecision(repository)));
     assert.deepEqual(await readModels(repository), []);
-    assert.deepEqual(await readdir(path.dirname(settingsPath(repository))), ["settings.json"]);
+    assert.deepEqual(
+        await readdir(path.dirname(settingsPath(repository))),
+        (await readDecision(repository)) === "enabled"
+            ? ["hook.py", "settings.json"]
+            : ["settings.json"],
+    );
     assert.deepEqual(JSON.parse(await readFile(settingsPath(repository), "utf8")).models, {
         [otherRoot]: ["other/model"],
     });
