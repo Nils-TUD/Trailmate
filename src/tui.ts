@@ -33,7 +33,7 @@ const tui: TuiPlugin = async (api) => {
 
             const render = () =>
                 api.ui.DialogSelect<Choice>({
-                    title: `Enable AI attribution? ${repository.root}`,
+                    title: `Enable Trailmate? ${repository.root}`,
                     options: [
                         {
                             title: "Enable",
@@ -85,7 +85,7 @@ const tui: TuiPlugin = async (api) => {
             failed.add(directory);
 
             if (!api.lifecycle.signal.aborted) {
-                api.ui.toast({ variant: "error", title: "AI attribution", message: String(error) });
+                api.ui.toast({ variant: "error", title: "Trailmate", message: String(error) });
             }
         }
     };
@@ -103,4 +103,4 @@ const tui: TuiPlugin = async (api) => {
     });
 };
 
-export default { id: "opencode-auto-attr", tui } satisfies TuiPluginModule;
+export default { id: "trailmate", tui } satisfies TuiPluginModule;

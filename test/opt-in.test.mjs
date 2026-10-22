@@ -14,7 +14,7 @@ const execute = promisify(execFile);
 const git = (cwd, ...args) => execute("git", ["-C", cwd, ...args]);
 
 async function fixture(t) {
-    const directory = await mkdtemp("/tmp/opencode/auto-attr-test-");
+    const directory = await mkdtemp("/tmp/opencode/trailmate-test-");
     t.after(() => rm(directory, { recursive: true, force: true }));
 
     const root = path.join(directory, "repository with spaces");
@@ -189,7 +189,7 @@ test("server loads and flushes without enabling headless repositories", async (t
         },
     });
 
-    assert.deepEqual(messages, ["AI attribution plugin loaded"]);
+    assert.deepEqual(messages, ["Trailmate plugin loaded"]);
     await hooks["tool.execute.before"]();
     assert.equal(await readDecision(repository), "unknown");
 });

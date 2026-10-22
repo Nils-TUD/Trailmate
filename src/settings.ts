@@ -14,7 +14,7 @@ export type Settings = Record<string, unknown> & {
 };
 
 export function settingsPath(repository: Repository): string {
-    return path.join(repository.commonDir, "opencode-attribution", "settings.json");
+    return path.join(repository.commonDir, "trailmate", "settings.json");
 }
 
 async function readSettings(repository: Repository): Promise<Settings> {
@@ -46,7 +46,7 @@ async function updateSettings(
         } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
             if (Date.now() >= deadline)
-                throw new Error(`Timed out waiting for attribution lock: ${lockFile}`);
+                throw new Error(`Timed out waiting for Trailmate lock: ${lockFile}`);
             await delay(25);
         }
     }

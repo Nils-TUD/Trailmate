@@ -10,9 +10,9 @@ const server: Plugin = async ({ client, directory }) => {
 
     await client.app.log({
         body: {
-            service: "opencode-auto-attr",
+            service: "trailmate",
             level: "info",
-            message: "AI attribution plugin loaded",
+            message: "Trailmate plugin loaded",
         },
     });
 
@@ -21,10 +21,10 @@ const server: Plugin = async ({ client, directory }) => {
             if (config.snapshot === false) {
                 await client.app.log({
                     body: {
-                        service: "opencode-auto-attr",
+                        service: "trailmate",
                         level: "warn",
                         message:
-                            "AI attribution needs OpenCode snapshots to receive file-changing patch events; snapshot is disabled.",
+                            "Trailmate needs OpenCode snapshots to receive file-changing patch events; snapshot is disabled.",
                     },
                 });
             }
@@ -38,4 +38,4 @@ const server: Plugin = async ({ client, directory }) => {
     };
 };
 
-export default { id: "opencode-auto-attr", server } satisfies PluginModule;
+export default { id: "trailmate", server } satisfies PluginModule;

@@ -16,7 +16,7 @@ export function createCollector(repository: Repository, client: PluginInput["cli
     let queue = Promise.resolve();
     const warn = async (error: unknown) => {
         await client.app.log({
-            body: { service: "opencode-auto-attr", level: "warn", message: String(error) },
+            body: { service: "trailmate", level: "warn", message: String(error) },
         });
     };
 

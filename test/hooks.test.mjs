@@ -31,7 +31,7 @@ const hookFile = async (root) =>
     ).stdout.replace(/\n$/, "");
 
 async function fixture(t, separate = false) {
-    const directory = await mkdtemp("/tmp/opencode/auto-attr-hooks-");
+    const directory = await mkdtemp("/tmp/opencode/trailmate-hooks-");
     t.after(() => rm(directory, { recursive: true, force: true }));
     const root = path.join(directory, "repository's files with spaces");
     await mkdir(root);
@@ -58,6 +58,10 @@ test("enable installs only prepare-commit-msg, repair and disable leave Git conf
     await git(root, "config", "core.hooksPath", ".user-hooks");
     await writeDecision(repository, true);
     assert.equal(await readHookStatus(repository), "installed");
+    assert.deepEqual(await readdir(path.join(repository.commonDir, "trailmate")), [
+        "hook.py",
+        "settings.json",
+    ]);
     await writeDecision(repository, true);
     await addModel(repository, "provider/model");
     const file = await hookFile(root);
@@ -368,7 +372,7 @@ test("installed hooks need only Git, shell and Python; corrupt settings do not s
     await rm(path.join(root, "user-hook-ran"));
     await writeFile(settingsPath(repository), "{");
     const result = await commit(root, "-qm", "corrupt settings");
-    assert.match(result.stderr, /AI attribution:/);
+    assert.match(result.stderr, /Trailmate:/);
     await readFile(path.join(root, "user-hook-ran"));
     assert.equal(await message(root), "corrupt settings");
 });

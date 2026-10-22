@@ -29,7 +29,7 @@ def prepare(args):
     if common != Path(__file__).resolve().parent.parent:
         return
 
-    settings = json.loads((common / "opencode-attribution/settings.json").read_text(encoding="utf-8"))
+    settings = json.loads((common / "trailmate/settings.json").read_text(encoding="utf-8"))
     if settings["enabled"] is not True:
         return
 
@@ -70,4 +70,4 @@ if __name__ == "__main__":
     try:
         prepare(sys.argv[1:])
     except Exception as error:
-        print("AI attribution: " + str(error), file=sys.stderr)
+        print("Trailmate: " + str(error), file=sys.stderr)

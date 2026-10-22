@@ -7,8 +7,7 @@ import type { Settings } from "./settings.js";
 
 const execute = promisify(execFile);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-const helper = (repository: Repository) =>
-    path.join(repository.commonDir, "opencode-attribution", "hook.py");
+const helper = (repository: Repository) => path.join(repository.commonDir, "trailmate", "hook.py");
 
 async function exists(file: string): Promise<boolean> {
     try {
@@ -34,7 +33,7 @@ async function hookFile(repository: Repository): Promise<string> {
 
 function launcher(repository: Repository): string {
     return `#!/bin/sh
-# opencode-auto-attr
+# trailmate
 exec python3 ${quote(helper(repository))} "$@"
 `;
 }

@@ -18,7 +18,7 @@ const execute = promisify(execFile);
 const git = (cwd, ...args) => execute("git", ["-C", cwd, ...args]);
 
 async function fixture(t) {
-    const directory = await mkdtemp("/tmp/opencode/auto-attr-store-");
+    const directory = await mkdtemp("/tmp/opencode/trailmate-store-");
     t.after(() => rm(directory, { recursive: true, force: true }));
     const root = path.join(directory, "repository with spaces");
     await mkdir(root);
@@ -42,6 +42,10 @@ async function seedModels(repository, models) {
 
 test("one JSON file stores preferences and sorted, deduplicated worktree models", async (t) => {
     const { repository } = await fixture(t);
+    assert.equal(
+        settingsPath(repository),
+        path.join(repository.commonDir, "trailmate", "settings.json"),
+    );
     assert.deepEqual(await readModels(repository), []);
     const models = ["z/legacy", "a/vendor/model", "z/legacy"];
     await seedModels(repository, models);
@@ -171,10 +175,7 @@ test("contention is bounded and does not delete another writer's lock", async (t
     await writeDecision(repository, true);
     const lock = `${settingsPath(repository)}.lock`;
     await writeFile(lock, "held");
-    await assert.rejects(
-        writeDecision(repository, false),
-        /Timed out waiting for attribution lock/,
-    );
+    await assert.rejects(writeDecision(repository, false), /Timed out waiting for Trailmate lock/);
     assert.equal(await readDecision(repository), "enabled");
     assert.equal(await readFile(lock, "utf8"), "held");
     await rm(lock);
@@ -221,7 +222,7 @@ test("native management provides only status, enable, disable, list and clear", 
         },
     };
     registerManagement(api);
-    assert.equal(commands[0].slash.name, "attribution");
+    assert.equal(commands[0].slash.name, "trailmate");
     const actions = ["status", "enable", "disable", "list", "clear"];
     for (const action of actions) {
         const result = new Promise((resolve) => {
@@ -234,7 +235,7 @@ test("native management provides only status, enable, disable, list and clear", 
         );
         dialog.onSelect({ value: action });
         const { message } = await result;
-        if (action === "status") assert.match(message, /^Attribution: unknown\n/);
+        if (action === "status") assert.match(message, /^Trailmate: unknown\n/);
         if (action === "enable") assert.equal(await readDecision(repository), "enabled");
         if (action === "disable") assert.equal(await readDecision(repository), "disabled");
         if (action === "list") assert.equal(message, "existing/model");

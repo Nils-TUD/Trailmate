@@ -16,7 +16,7 @@ export function registerManagement(api: Api): void {
     const report = (result: string) => {
         api.ui.dialog.replace(() =>
             api.ui.DialogAlert({
-                title: "AI attribution result",
+                title: "Trailmate result",
                 message: result,
                 onConfirm: () => api.ui.dialog.clear(),
             }),
@@ -28,14 +28,14 @@ export function registerManagement(api: Api): void {
         const run = async (action: Action) => {
             try {
                 const repository = await discoverRepository(directory);
-                if (!repository) throw new Error("Attribution requires a Git worktree");
+                if (!repository) throw new Error("Trailmate requires a Git worktree");
 
                 // Never apply an old dialog's changes to a newly selected workspace.
                 if (api.lifecycle.signal.aborted || api.state.path.directory !== directory) return;
                 let result: string;
                 if (action === "enable" || action === "disable") {
                     await writeDecision(repository, action === "enable");
-                    result = `Attribution: ${action === "enable" ? "enabled" : "disabled"}`;
+                    result = `Trailmate: ${action === "enable" ? "enabled" : "disabled"}`;
                 } else if (action === "clear") {
                     await clearModels(repository);
                     result = "Model attribution cleared.";
@@ -43,7 +43,7 @@ export function registerManagement(api: Api): void {
                     const models = (await readModels(repository)).join("\n") || "(no models)";
                     result =
                         action === "status"
-                            ? `Attribution: ${await readDecision(repository)}\nRepository: ${repository.root}\nHook: ${await readHookStatus(repository)}\n${models}`
+                            ? `Trailmate: ${await readDecision(repository)}\nRepository: ${repository.root}\nHook: ${await readHookStatus(repository)}\n${models}`
                             : models;
                 }
                 if (!api.lifecycle.signal.aborted && api.state.path.directory === directory) {
@@ -53,7 +53,7 @@ export function registerManagement(api: Api): void {
                 if (!api.lifecycle.signal.aborted) {
                     api.ui.toast({
                         variant: "error",
-                        title: "AI attribution",
+                        title: "Trailmate",
                         message: String(error),
                     });
                 }
@@ -62,7 +62,7 @@ export function registerManagement(api: Api): void {
 
         api.ui.dialog.replace(() =>
             api.ui.DialogSelect<Action>({
-                title: "Manage AI attribution",
+                title: "Manage Trailmate",
                 options: actions.map((action) => ({ title: action, value: action })),
                 onSelect: ({ value }) => void run(value),
             }),
@@ -73,10 +73,10 @@ export function registerManagement(api: Api): void {
     // the supported 1.x hosts; selecting it never sends a prompt to a model.
     const unregister = api.command?.register(() => [
         {
-            title: "Manage AI attribution",
-            value: "opencode-auto-attr.manage",
-            category: "AI attribution",
-            slash: { name: "attribution" },
+            title: "Manage Trailmate",
+            value: "trailmate.manage",
+            category: "Trailmate",
+            slash: { name: "trailmate" },
             onSelect: open,
         },
     ]);

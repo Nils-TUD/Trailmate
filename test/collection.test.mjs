@@ -10,7 +10,7 @@ import { clearModels, readModels, settingsPath, writeDecision } from "../dist/se
 const execute = promisify(execFile);
 
 async function fixture(t) {
-    const root = await mkdtemp("/tmp/opencode/auto-attr-collection-");
+    const root = await mkdtemp("/tmp/opencode/trailmate-collection-");
     t.after(() => rm(root, { recursive: true, force: true }));
     await execute("git", ["-C", root, "init", "-q"]);
     const repository = await discoverRepository(root);
