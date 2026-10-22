@@ -6,8 +6,6 @@ const execute = promisify(execFile);
 
 export interface Repository {
     root: string;
-    // Worktree-local Git metadata.
-    gitDir: string;
     // Shared metadata; all plugin state lives here, with models keyed by root.
     commonDir: string;
 }
@@ -24,16 +22,14 @@ export async function discoverRepository(directory: string): Promise<Repository 
         if ((await git("--is-inside-work-tree")) !== "true") return undefined;
 
         // Ask Git instead of assuming .git is a directory inside the worktree.
-        const [root, gitDir, commonDir] = await Promise.all([
+        const [root, commonDir] = await Promise.all([
             git("--show-toplevel"),
-            git("--absolute-git-dir"),
             git("--path-format=absolute", "--git-common-dir"),
         ]);
 
         // Canonical paths keep symlink aliases from creating separate identities.
         return {
             root: await realpath(root),
-            gitDir: await realpath(gitDir),
             commonDir: await realpath(commonDir),
         };
     } catch (error) {

@@ -157,44 +157,6 @@ test("unrelated hooks remain untouched and keep their normal behavior", async (t
     assert.deepEqual(after, before);
 });
 
-test("old launchers without user backups can be refreshed", async (t) => {
-    const { root, repository } = await fixture(t);
-    await writeDecision(repository, true);
-    const file = await hookFile(root);
-    const current = await readFile(file, "utf8");
-    const backup = `'${`${file}.opencode-auto-attr-original`.replaceAll("'", "'\\''")}'`;
-    const previous = current.replace(
-        "exec python3",
-        `if [ -x ${backup} ]; then\n    ${backup} "$@" || exit $?\nfi\nexec python3`,
-    );
-    await writeFile(file, previous);
-    const settings = JSON.parse(await readFile(settingsPath(repository), "utf8"));
-    settings.hooks[0].original = false;
-    await writeFile(settingsPath(repository), JSON.stringify(settings));
-    await writeDecision(repository, true);
-    assert.equal(await readFile(file, "utf8"), current);
-    await addModel(repository, "p/m");
-    await commit(root, "-qm", "refreshed");
-    assert.equal(await message(root), "refreshed\n\nAssisted-by: p/m");
-});
-
-test("old installations with user backups fail without discarding them", async (t) => {
-    const { root, repository } = await fixture(t);
-    await writeDecision(repository, true);
-    const file = await hookFile(root);
-    const contents = await readFile(file);
-    const backup = `${file}.opencode-auto-attr-original`;
-    await script(backup, "exit 42");
-    const original = await readFile(backup);
-    const settings = JSON.parse(await readFile(settingsPath(repository), "utf8"));
-    settings.hooks[0].original = true;
-    await writeFile(settingsPath(repository), JSON.stringify(settings));
-    await assert.rejects(writeDecision(repository, true), /previous plugin version/);
-    await assert.rejects(writeDecision(repository, false), /previous plugin version/);
-    assert.deepEqual(await readFile(file), contents);
-    assert.deepEqual(await readFile(backup), original);
-});
-
 test("editor sees initial trailers and may remove or replace them", async (t) => {
     const { root, directory, repository } = await fixture(t);
     await writeDecision(repository, true);
@@ -341,36 +303,6 @@ test("tracked prepare hooks are left untouched", async (t) => {
     await assert.rejects(writeDecision(repository, true), /prepare-commit-msg already exists/);
     assert.deepEqual(await readFile(file), original);
     assert.equal(await readDecision(repository), "unknown");
-});
-
-test("the previous all-hooks installation is replaced by one prepare hook", async (t) => {
-    const { root, repository } = await fixture(t);
-    const directory = path.join(repository.commonDir, "opencode-attribution", "hooks");
-    await mkdir(directory, { recursive: true });
-    await script(path.join(directory, "pre-commit"), "exit 71");
-    await script(path.join(directory, "commit-msg"), "exit 72");
-    await git(root, "config", "core.hooksPath", directory);
-    await writeFile(
-        settingsPath(repository),
-        JSON.stringify({
-            version: 1,
-            enabled: true,
-            models: { [root]: ["p/m"] },
-            hooks: {
-                directory,
-                previousLocal: [],
-                previousPath: path.join(repository.commonDir, "hooks"),
-            },
-        }),
-    );
-    await writeDecision(repository, true);
-    await assert.rejects(git(root, "config", "--get", "core.hooksPath"));
-    await assert.rejects(readFile(path.join(directory, "pre-commit")));
-    await assert.rejects(readFile(path.join(directory, "commit-msg")));
-    await commit(root, "-qm", "simplified");
-    assert.equal(await message(root), "simplified\n\nAssisted-by: p/m");
-    await writeDecision(repository, false);
-    assert.deepEqual(await readModels(repository), ["p/m"]);
 });
 
 test("relative hooks in linked worktrees can each be enabled and are all removed on disable", async (t) => {

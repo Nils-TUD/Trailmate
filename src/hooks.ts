@@ -10,10 +10,6 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const helper = (repository: Repository) =>
     path.join(repository.commonDir, "opencode-attribution", "hook.py");
 
-interface Hook {
-    file: string;
-}
-
 async function exists(file: string): Promise<boolean> {
     try {
         await lstat(file);
@@ -36,26 +32,6 @@ async function hookFile(repository: Repository): Promise<string> {
     return stdout.replace(/\n$/, "");
 }
 
-function hooks(settings: Settings): Hook[] {
-    if (settings.hooks === undefined) return [];
-
-    if (
-        !Array.isArray(settings.hooks) ||
-        settings.hooks.some(
-            (hook) => !hook || typeof hook.file !== "string" || !path.isAbsolute(hook.file),
-        )
-    ) {
-        throw new Error("Invalid attribution hook metadata");
-    }
-
-    if (settings.hooks.some((hook) => hook.original === true)) {
-        throw new Error(
-            "Disable the existing backup-based hook installation with the previous plugin version first",
-        );
-    }
-    return settings.hooks.map(({ file }) => ({ file }));
-}
-
 function launcher(repository: Repository): string {
     return `#!/bin/sh
 # opencode-auto-attr
@@ -65,7 +41,7 @@ exec python3 ${quote(helper(repository))} "$@"
 
 export async function hookStatus(repository: Repository, settings: Settings): Promise<string> {
     const file = await hookFile(repository);
-    return hooks(settings).some((hook) => hook.file === file)
+    return settings.hooks?.some((hook) => hook.file === file)
         ? "installed"
         : "not installed in this worktree";
 }
@@ -77,38 +53,7 @@ export async function configureHooks(
     enabled: boolean,
     publish: () => Promise<void>,
 ): Promise<void> {
-    // Remove the previous all-hooks overlay once, restoring its saved config.
-    if (settings.hooks !== undefined && !Array.isArray(settings.hooks)) {
-        const old = settings.hooks as { directory: string; previousLocal: string[] };
-        const directory = path.join(repository.commonDir, "opencode-attribution", "hooks");
-        if (
-            !old ||
-            old.directory !== directory ||
-            !Array.isArray(old.previousLocal) ||
-            old.previousLocal.some((value) => typeof value !== "string")
-        ) {
-            throw new Error("Invalid attribution hook metadata");
-        }
-
-        settings.enabled = false;
-        await publish();
-        const git = (...args: string[]) =>
-            execute("git", ["-C", repository.root, "config", "--local", ...args]);
-        const current = await git("--get", "core.hooksPath").catch((error) => {
-            if (error.code === 1) return { stdout: "" };
-            throw error;
-        });
-        if (current.stdout.replace(/\n$/, "") === directory) {
-            await git("--unset-all", "core.hooksPath");
-            for (const value of old.previousLocal) await git("--add", "core.hooksPath", value);
-        }
-
-        await rm(directory, { recursive: true, force: true });
-        delete settings.hooks;
-        await publish();
-    }
-
-    const installed = hooks(settings);
+    const installed = settings.hooks ?? [];
     if (enabled) {
         await execute("python3", ["--version"]);
         const file = await hookFile(repository);

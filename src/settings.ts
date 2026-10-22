@@ -10,54 +10,21 @@ export type Settings = Record<string, unknown> & {
     version: 1;
     enabled: boolean | null;
     models: Record<string, string[]>;
+    hooks?: { file: string }[];
 };
 
 export function settingsPath(repository: Repository): string {
     return path.join(repository.commonDir, "opencode-attribution", "settings.json");
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 async function readSettings(repository: Repository): Promise<Settings> {
-    const file = settingsPath(repository);
-    let contents: Buffer;
     try {
-        contents = await readFile(file);
+        return JSON.parse(await readFile(settingsPath(repository), "utf8")) as Settings;
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") {
             return { version: 1, enabled: null, models: {} };
         }
         throw error;
-    }
-
-    try {
-        const settings: unknown = JSON.parse(
-            new TextDecoder("utf-8", { fatal: true }).decode(contents),
-        );
-        if (
-            !isObject(settings) ||
-            settings.version !== 1 ||
-            (settings.enabled !== null && typeof settings.enabled !== "boolean")
-        ) {
-            throw new Error("expected version 1 and a boolean or null enabled field");
-        }
-
-        // Accept the preference-only files written by phase 1.
-        const models = settings.models === undefined ? {} : settings.models;
-        if (
-            !isObject(models) ||
-            Object.values(models).some(
-                (values) =>
-                    !Array.isArray(values) || values.some((value) => typeof value !== "string"),
-            )
-        ) {
-            throw new Error("expected a worktree-to-models map containing arrays of strings");
-        }
-        return { ...settings, models } as Settings;
-    } catch (error) {
-        throw new Error(`Invalid attribution settings at ${file}`, { cause: error });
     }
 }
 

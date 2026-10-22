@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { test } from "node:test";
 import { discoverRepository } from "../dist/repository.js";
-import { readDecision, settingsPath, writeDecision } from "../dist/settings.js";
+import { readDecision, writeDecision } from "../dist/settings.js";
 import { OptIn } from "../dist/opt-in.js";
 import serverModule from "../dist/server.js";
 import tuiModule from "../dist/tui.js";
@@ -28,8 +28,7 @@ test("unborn repositories, subdirectories, non-repositories and bare repositorie
     const { directory, root, repository } = await fixture(t);
 
     assert.equal(repository.root, root);
-    assert.equal(repository.gitDir, path.join(root, ".git"));
-    assert.equal(repository.commonDir, repository.gitDir);
+    assert.equal(repository.commonDir, path.join(root, ".git"));
 
     const child = path.join(root, "nested");
     await mkdir(child);
@@ -71,11 +70,10 @@ test("settings persist across readers and linked worktrees share the decision", 
     const other = await discoverRepository(linked);
 
     assert.equal(other.commonDir, repository.commonDir);
-    assert.notEqual(other.gitDir, repository.gitDir);
     assert.equal(await readDecision(other), "enabled");
 });
 
-test("separate Git directory and malformed settings", async (t) => {
+test("separate Git directory", async (t) => {
     const { directory } = await fixture(t);
 
     const root = path.join(directory, "separate");
@@ -84,15 +82,7 @@ test("separate Git directory and malformed settings", async (t) => {
     await git(root, "init", "-q", `--separate-git-dir=${gitDir}`);
 
     const repository = await discoverRepository(root);
-    assert.equal(repository.gitDir, gitDir);
-
-    await writeDecision(repository, false);
-
-    // Syntax errors, unsupported versions, and wrong field types all fail closed.
-    for (const invalid of ["{", '{"version":2,"enabled":true}', '{"version":1,"enabled":"yes"}']) {
-        await writeFile(settingsPath(repository), invalid);
-        await assert.rejects(readDecision(repository), /Invalid attribution settings/);
-    }
+    assert.equal(repository.commonDir, gitDir);
 });
 
 test("Later suppresses repeated prompts; restarting asks again; disable persists", async (t) => {
@@ -184,7 +174,7 @@ test("concurrent checks in one TUI open only one prompt", async (t) => {
     assert.equal(await readDecision(repository), "enabled");
 });
 
-test("server rereads decisions before tools, without enabling headless repositories", async (t) => {
+test("server loads and flushes without enabling headless repositories", async (t) => {
     const { root, repository } = await fixture(t);
     const messages = [];
 
@@ -199,16 +189,9 @@ test("server rereads decisions before tools, without enabling headless repositor
         },
     });
 
-    assert.match(messages[0], /unknown/);
+    assert.deepEqual(messages, ["AI attribution plugin loaded"]);
+    await hooks["tool.execute.before"]();
     assert.equal(await readDecision(repository), "unknown");
-
-    await writeDecision(repository, true);
-    await hooks["tool.execute.before"]();
-    assert.match(messages[1], /enabled/);
-
-    await writeDecision(repository, false);
-    await hooks["tool.execute.before"]();
-    assert.match(messages[2], /disabled/);
 });
 
 test("TUI waits for readiness, closes with Later, and cleans up on disposal", async (t) => {

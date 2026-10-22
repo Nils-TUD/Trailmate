@@ -30,18 +30,11 @@ def prepare(args):
         return
 
     settings = json.loads((common / "opencode-attribution/settings.json").read_text(encoding="utf-8"))
-    if settings.get("version") != 1:
-        raise ValueError("invalid attribution settings")
-    if settings.get("enabled") is not True:
+    if settings["enabled"] is not True:
         return
 
     root = os.path.realpath(os.fsdecode(git("rev-parse", "--show-toplevel")).rstrip("\n"))
-    models = settings.get("models", {}).get(root, [])
-    if not isinstance(models, list) or any(
-        not isinstance(model, str) or not model or any(c in model for c in "\n\r\0")
-        for model in models
-    ):
-        raise ValueError("expected nonempty single-line model identifiers")
+    models = settings["models"].get(root, [])
 
     if not models or (len(args) > 1 and args[1] in ("merge", "squash")):
         return
