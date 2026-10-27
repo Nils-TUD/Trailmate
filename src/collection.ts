@@ -1,24 +1,51 @@
-import type { PluginInput } from "@opencode-ai/plugin";
-import type { Event, Message } from "@opencode-ai/sdk";
 import { discoverRepository, type Repository } from "./repository.js";
 import { addModel, readDecision } from "./settings.js";
+
+// Only the attribution data is shared; each host adapts its own SDK at the edge.
+export type AttributionMessage = { id: string; sessionID: string } & (
+    | { role: "user" }
+    | {
+          role: "assistant";
+          summary?: boolean;
+          path: { cwd: string };
+          providerID: string;
+          modelID: string;
+      }
+);
+
+type CollectionEvent =
+    | { type: "session.deleted"; properties: { info: { id: string } } }
+    | { type: "message.updated"; properties: { info: AttributionMessage } }
+    | {
+          type: "message.part.updated";
+          properties: {
+              part: {
+                  type: "patch";
+                  id: string;
+                  sessionID: string;
+                  messageID: string;
+                  files: string[];
+              };
+          };
+      };
+
+interface Host {
+    message(sessionID: string, messageID: string): Promise<AttributionMessage | undefined>;
+    warn(error: unknown): Promise<void>;
+}
 
 interface Entry {
     sessionID: string;
     messageID: string;
-    info?: Message;
+    info?: AttributionMessage;
     pending: boolean;
     seen: Set<string>;
 }
 
-export function createCollector(repository: Repository, client: PluginInput["client"]) {
+export function createCollector(repository: Repository, host: Host) {
     const entries = new Map<string, Entry>();
     let queue = Promise.resolve();
-    const warn = async (error: unknown) => {
-        await client.app.log({
-            body: { service: "trailmate", level: "warn", message: String(error) },
-        });
-    };
+    const warn = host.warn;
 
     const flush = async () => {
         for (const entry of entries.values()) {
@@ -26,12 +53,8 @@ export function createCollector(repository: Repository, client: PluginInput["cli
 
             try {
                 if (!entry.info) {
-                    const response = await client.session.message({
-                        path: { id: entry.sessionID, messageID: entry.messageID },
-                        query: { directory: repository.root },
-                    });
-                    if (!response.data) continue;
-                    entry.info = response.data.info;
+                    entry.info = await host.message(entry.sessionID, entry.messageID);
+                    if (!entry.info) continue;
                 }
 
                 const info = entry.info;
@@ -57,7 +80,7 @@ export function createCollector(repository: Repository, client: PluginInput["cli
 
     return {
         flush: () => run(flush),
-        event: (event: Event) =>
+        event: (event: CollectionEvent) =>
             run(async () => {
                 if (event.type === "session.deleted") {
                     for (const [key, entry] of entries) {

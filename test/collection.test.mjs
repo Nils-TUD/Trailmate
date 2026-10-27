@@ -19,8 +19,8 @@ async function fixture(t) {
     const warnings = [];
     const messages = new Map();
     const collector = createCollector(repository, {
-        app: { log: async ({ body }) => warnings.push(body.message) },
-        session: { message: async ({ path }) => ({ data: messages.get(path.messageID) }) },
+        warn: async (error) => warnings.push(String(error)),
+        message: async (_sessionID, messageID) => messages.get(messageID)?.info,
     });
     const info = (id, extra = {}) => ({
         id,

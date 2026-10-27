@@ -1,106 +1,112 @@
-import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
+import type { Plugin } from "@opencode/plugin/tui";
+import { actions, runAction, type Action } from "./actions.js";
 import { OptIn, type Choice } from "./opt-in.js";
-import type { Repository } from "./repository.js";
-import { registerManagement } from "./management.js";
+import { discoverRepository } from "./repository.js";
 
-const tui: TuiPlugin = async (api) => {
-    registerManagement(api);
-    const optIn = new OptIn();
-    // Avoid repeating the same operational error on every polling tick.
-    const failed = new Set<string>();
-
-    let cancelPrompt: (() => void) | undefined;
-    let promptDirectory: string | undefined;
-
-    // Keep dialog rendering and settlement separate from the polling checks.
-    const prompt = (directory: string, repository: Repository): Promise<Choice> => {
-        return new Promise((resolve) => {
-            let settled = false;
-
-            // Clearing a dialog also invokes its onClose callback. Settle first
-            // so that callback cannot replace an explicit choice with Later.
-            const finish = (choice: Choice, close: boolean) => {
-                if (settled) return;
-
-                settled = true;
-                cancelPrompt = undefined;
-                promptDirectory = undefined;
-
-                if (close) api.ui.dialog.clear();
-
-                resolve(choice);
-            };
-
-            const render = () =>
-                api.ui.DialogSelect<Choice>({
-                    title: `Enable Trailmate? ${repository.root}`,
-                    options: [
-                        {
-                            title: "Enable",
-                            value: "enable",
-                            description:
-                                "Save opt-in for model tracking and Assisted-by Git trailers " +
-                                "(coming in later phases).",
-                        },
-                        {
-                            title: "Disable",
-                            value: "disable",
-                            description:
-                                "Keep attribution disabled for this repository; do not ask again.",
-                        },
-                        {
-                            title: "Later",
-                            value: "later",
-                            description: "Ask next time OpenCode starts.",
-                        },
-                    ],
-                    onSelect: ({ value }) => finish(value, true),
-                });
-
-            promptDirectory = directory;
-            cancelPrompt = () => finish("later", true);
-
-            api.ui.dialog.replace(render, () => finish("later", false));
-        });
-    };
-
-    const tick = async () => {
-        const directory = api.state.path.directory;
-
-        // An old repository's dialog must not survive a workspace switch.
-        if (cancelPrompt && directory !== promptDirectory) cancelPrompt();
-
-        if (!api.state.ready || !directory || api.ui.dialog.open || failed.has(directory)) return;
-
-        try {
-            await optIn.check(
-                directory,
-                () =>
-                    !api.lifecycle.signal.aborted &&
-                    api.state.path.directory === directory &&
-                    !api.ui.dialog.open,
-                (repository) => prompt(directory, repository),
-            );
-        } catch (error) {
-            failed.add(directory);
-
-            if (!api.lifecycle.signal.aborted) {
-                api.ui.toast({ variant: "error", title: "Trailmate", message: String(error) });
+export default {
+    id: "trailmate",
+    setup(ctx) {
+        const optIn = new OptIn();
+        const failed = new Set<string>();
+        let disposed = false;
+        let dialogDirectory: string | undefined;
+        const directory = () => (ctx.location ?? ctx.data.location.default()).directory;
+        const current = (path: string) => !disposed && directory() === path;
+        const error = (error: unknown) => {
+            if (!disposed)
+                ctx.ui.toast.show({ title: "Trailmate", variant: "error", message: String(error) });
+        };
+        // Track only dialogs owned by this plugin, so cleanup leaves other UI alone.
+        const select = async <T>(
+            path: string,
+            title: string,
+            options: { title: string; value: T; description?: string }[],
+        ) => {
+            dialogDirectory = path;
+            try {
+                return await ctx.ui.dialog.select<T>({ title, options });
+            } finally {
+                dialogDirectory = undefined;
             }
-        }
-    };
+        };
+        const manage = async () => {
+            const path = directory();
+            try {
+                const action = await select<Action>(
+                    path,
+                    "Manage Trailmate",
+                    actions.map((value) => ({ title: value, value })),
+                );
+                if (!action || !current(path)) return;
+                const repository = await discoverRepository(path);
+                if (!current(path)) return;
+                if (!repository) throw new Error("Trailmate requires a Git worktree");
+                const message = await runAction(repository, action);
+                if (current(path)) {
+                    dialogDirectory = path;
+                    try {
+                        await ctx.ui.dialog.alert({ title: "Trailmate result", message });
+                    } finally {
+                        dialogDirectory = undefined;
+                    }
+                }
+            } catch (cause) {
+                error(cause);
+            }
+        };
+        ctx.keymap.layer(() => ({
+            mode: "global",
+            commands: [
+                {
+                    id: "trailmate.manage",
+                    title: "Manage Trailmate",
+                    group: "Trailmate",
+                    palette: true,
+                    slash: { name: "trailmate" },
+                    run: manage,
+                },
+            ],
+        }));
 
-    // The host state is live; polling handles initial sync and workspace changes
-    // without relying on private Solid internals or undocumented bus events.
-    const timer = setInterval(() => {
-        void tick();
-    }, 500);
-
-    // Resolve any outstanding prompt so its async check can finish on shutdown.
-    api.lifecycle.onDispose(() => {
-        clearInterval(timer);
-        cancelPrompt?.();
-    });
-};
-
-export default { id: "trailmate", tui } satisfies TuiPluginModule;
+        const tick = async () => {
+            const path = directory();
+            if (dialogDirectory && dialogDirectory !== path) ctx.ui.dialog.clear();
+            if (disposed || !path || dialogDirectory || failed.has(path)) return;
+            try {
+                await optIn.check(
+                    path,
+                    () => current(path) && !dialogDirectory,
+                    async (repository) =>
+                        (await select<Choice>(path, `Enable Trailmate? ${repository.root}`, [
+                            {
+                                title: "Enable",
+                                value: "enable",
+                                description: "Track models and install Assisted-by Git trailers.",
+                            },
+                            {
+                                title: "Disable",
+                                value: "disable",
+                                description: "Disable attribution; do not ask again.",
+                            },
+                            {
+                                title: "Later",
+                                value: "later",
+                                description: "Ask next time OpenCode starts.",
+                            },
+                        ])) ?? "later",
+                );
+            } catch (cause) {
+                failed.add(path);
+                error(cause);
+            }
+        };
+        const timer = setInterval(() => {
+            void tick();
+        }, 500);
+        return () => {
+            disposed = true;
+            clearInterval(timer);
+            if (dialogDirectory) ctx.ui.dialog.clear();
+        };
+    },
+} satisfies Plugin.Definition;

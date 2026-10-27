@@ -1,16 +1,8 @@
 import type { TuiPlugin } from "@opencode-ai/plugin/tui";
 import { discoverRepository } from "./repository.js";
-import {
-    clearModels,
-    readDecision,
-    readHookStatus,
-    readModels,
-    writeDecision,
-} from "./settings.js";
+import { actions, runAction, type Action } from "./actions.js";
 
 type Api = Parameters<TuiPlugin>[0];
-const actions = ["status", "enable", "disable", "list", "clear"] as const;
-type Action = (typeof actions)[number];
 
 export function registerManagement(api: Api): void {
     const report = (result: string) => {
@@ -32,20 +24,7 @@ export function registerManagement(api: Api): void {
 
                 // Never apply an old dialog's changes to a newly selected workspace.
                 if (api.lifecycle.signal.aborted || api.state.path.directory !== directory) return;
-                let result: string;
-                if (action === "enable" || action === "disable") {
-                    await writeDecision(repository, action === "enable");
-                    result = `Trailmate: ${action === "enable" ? "enabled" : "disabled"}`;
-                } else if (action === "clear") {
-                    await clearModels(repository);
-                    result = "Model attribution cleared.";
-                } else {
-                    const models = (await readModels(repository)).join("\n") || "(no models)";
-                    result =
-                        action === "status"
-                            ? `Trailmate: ${await readDecision(repository)}\nRepository: ${repository.root}\nHook: ${await readHookStatus(repository)}\n${models}`
-                            : models;
-                }
+                const result = await runAction(repository, action);
                 if (!api.lifecycle.signal.aborted && api.state.path.directory === directory) {
                     report(result);
                 }

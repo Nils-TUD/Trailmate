@@ -8,8 +8,8 @@ import { test } from "node:test";
 import { discoverRepository } from "../dist/repository.js";
 import { readDecision, writeDecision } from "../dist/settings.js";
 import { OptIn } from "../dist/opt-in.js";
-import serverModule from "../dist/server.js";
-import tuiModule from "../dist/tui.js";
+import serverModule from "../dist/server-v1.js";
+import tuiModule from "../dist/tui-v1.js";
 
 const execute = promisify(execFile);
 const git = (cwd, ...args) => execute("git", ["-C", cwd, ...args]);

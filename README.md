@@ -16,39 +16,65 @@ or the **Manage Trailmate** command-palette entry to open a native menu with the
 
 ## Requirements
 
-- OpenCode 1.18.4 or newer in the 1.x series.
+- OpenCode 2.1.3+ (2.x). OpenCode 1.18.4+ (1.x) is supported through alternative entrypoints.
 - Git with `rev-parse --path-format=absolute` support (Git 2.31+).
 - Python 3 and a POSIX shell on PATH for installation and Git hooks; verified on Linux.
 - Node.js 22+ and npm for **development builds and testing only**.
 
 ## Install from GitHub
 
-1. Clone the repository into a permanent location:
+Clone the repository into a permanent location:
 
-    ```sh
-    git clone https://github.com/Nils-TUD/Trailmate.git ~/trailmate
-    ```
+```sh
+git clone https://github.com/Nils-TUD/Trailmate.git ~/trailmate
+```
 
-    OpenCode loads the TypeScript source directly; no build or dependency install
-    is needed.
+OpenCode loads the TypeScript source directly; no build or dependency install
+is needed.
 
-2. Add the server plugin to `~/.config/opencode/opencode.json`:
+### OpenCode 2.x (default)
 
-    ```json
-    {
-        "$schema": "https://opencode.ai/config.json",
-        "plugin": ["file:///absolute/path/to/trailmate/src/server.ts"]
-    }
-    ```
+Add the server plugin to `~/.config/opencode/opencode.json`:
 
-3. Add the TUI plugin to `~/.config/opencode/tui.json`:
+```json
+{
+    "$schema": "https://opencode.ai/config.json",
+    "plugins": ["file:///absolute/path/to/trailmate/src/server.ts"]
+}
+```
 
-    ```json
-    {
-        "$schema": "https://opencode.ai/tui.json",
-        "plugin": ["file:///absolute/path/to/trailmate/src/tui.ts"]
-    }
-    ```
+Add the terminal plugin to `~/.config/opencode/cli.json`:
+
+```json
+{
+    "plugins": ["file:///absolute/path/to/trailmate/src/tui.ts"]
+}
+```
+
+### OpenCode 1.x (alternative)
+
+Add the V1 server entrypoint to `~/.config/opencode/opencode.json`:
+
+```json
+{
+    "$schema": "https://opencode.ai/config.json",
+    "plugin": ["file:///absolute/path/to/trailmate/src/server-v1.ts"]
+}
+```
+
+Add the V1 TUI entrypoint to `~/.config/opencode/tui.json`:
+
+```json
+{
+    "$schema": "https://opencode.ai/tui.json",
+    "plugin": ["file:///absolute/path/to/trailmate/src/tui-v1.ts"]
+}
+```
+
+Use the entrypoints matching your OpenCode major version. Both versions share repository
+preferences, model attribution, and Git hooks. V2 tracks snapshot files from completed or failed
+assistant steps; snapshots must be enabled. Server and terminal plugins need access to the same
+local repository, as in V1.
 
 Keep the checkout in place. **Quit and restart OpenCode** after installation, then choose **Enable**
 when Trailmate prompts you in a repository.

@@ -13,7 +13,7 @@ import {
     settingsPath,
     writeDecision,
 } from "../dist/settings.js";
-import { registerManagement } from "../dist/management.js";
+import { registerManagement } from "../dist/management-v1.js";
 
 const execute = promisify(execFile);
 const git = (cwd, ...args) => execute("git", ["-C", cwd, ...args]);
