@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -84,7 +84,7 @@ test("enable installs only prepare-commit-msg, repair and disable leave Git conf
     assert.equal(await message(root), "disabled");
 });
 
-test("existing prepare hooks fail enable without modifying files or settings", async (t) => {
+test("existing prepare hooks run before attribution and are restored on disable", async (t) => {
     for (const kind of ["default", "relative", "absolute"]) {
         await t.test(kind, async (t) => {
             const { root, repository } = await fixture(t);
@@ -101,23 +101,20 @@ test("existing prepare hooks fail enable without modifying files or settings", a
                     kind === "relative" ? "user hooks" : hooks,
                 );
             const file = await hookFile(root);
-            await script(file, "exit 37");
+            await script(file, 'printf "existing: %s\\n" "$2" >> "$1"\nexit 0');
             const contents = await readFile(file);
-            await assert.rejects(
-                writeDecision(repository, true),
-                /prepare-commit-msg already exists/,
-            );
-            assert.equal(await readDecision(repository), "unknown");
-            assert.deepEqual(await readFile(file), contents);
-            assert.deepEqual(
-                await readdir(hooks).then((files) =>
-                    files.filter((file) => !file.endsWith(".sample")),
-                ),
-                ["prepare-commit-msg"],
-            );
+            const mode = (await lstat(file)).mode;
+            await writeDecision(repository, true);
+            await writeDecision(repository, true);
+            await addModel(repository, "p/m");
+            await commit(root, "-qm", "chained");
+            assert.equal(await message(root), "chained\nexisting: message\n\nAssisted-by: p/m");
             await writeDecision(repository, false);
             assert.deepEqual(await readFile(file), contents);
-            await assert.rejects(commit(root, "-qm", "still blocked by existing hook"));
+            assert.equal((await lstat(file)).mode, mode);
+            await assert.rejects(readFile(`${file}.trailmate-original`));
+            await commit(root, "-qm", "restored");
+            assert.equal(await message(root), "restored\nexisting: message");
         });
     }
 });
@@ -276,6 +273,47 @@ test("an interrupted installation can be retried or disabled", async (t) => {
     await assert.rejects(git(root, "config", "--local", "--get", "core.hooksPath"));
 });
 
+test("an interrupted chained installation preserves the original on retry or disable", async (t) => {
+    for (const retry of [false, true]) {
+        await t.test(retry ? "retry" : "disable", async (t) => {
+            const { root, repository } = await fixture(t);
+            const file = await hookFile(root);
+            await script(file, "exit 0");
+            const original = await readFile(file);
+            await mkdir(`${file}.tmp`);
+            await assert.rejects(writeDecision(repository, true));
+            assert.deepEqual(await readFile(`${file}.trailmate-original`), original);
+            await rm(`${file}.tmp`, { recursive: true });
+            if (retry) {
+                await writeDecision(repository, true);
+                await addModel(repository, "p/m");
+                await commit(root, "-qm", "recovered");
+                assert.equal(await message(root), "recovered\n\nAssisted-by: p/m");
+            }
+            await writeDecision(repository, false);
+            assert.deepEqual(await readFile(file), original);
+        });
+    }
+});
+
+test("older standalone Trailmate launchers are upgraded without duplication", async (t) => {
+    const { root, repository } = await fixture(t);
+    await writeDecision(repository, true);
+    const file = await hookFile(root);
+    const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+    const helper = path.join(repository.commonDir, "trailmate", "hook.py");
+    await script(file, `# trailmate\nexec python3 ${quote(helper)} "$@"`);
+    await writeDecision(repository, true);
+    await writeDecision(repository, true);
+    assert.equal((await readFile(file, "utf8")).match(/python3/g).length, 1);
+    await assert.rejects(readFile(`${file}.trailmate-original`));
+    await addModel(repository, "p/m");
+    await commit(root, "-qm", "upgraded");
+    assert.equal(await message(root), "upgraded\n\nAssisted-by: p/m");
+    await writeDecision(repository, false);
+    await assert.rejects(readFile(file));
+});
+
 test("hook paths in repository includes work without configuration changes", async (t) => {
     const { root, directory, repository } = await fixture(t);
     const inherited = path.join(directory, "inherited config");
@@ -297,7 +335,7 @@ test("hook paths in repository includes work without configuration changes", asy
     await assert.rejects(git(root, "config", "--local", "--get", "core.hooksPath"));
 });
 
-test("tracked prepare hooks are left untouched", async (t) => {
+test("tracked prepare hooks are restored on disable", async (t) => {
     const { root, repository } = await fixture(t);
     await git(root, "config", "core.hooksPath", ".hooks");
     await mkdir(path.join(root, ".hooks"));
@@ -305,9 +343,10 @@ test("tracked prepare hooks are left untouched", async (t) => {
     await script(file, "exit 0");
     const original = await readFile(file);
     await git(root, "add", ".hooks/prepare-commit-msg");
-    await assert.rejects(writeDecision(repository, true), /prepare-commit-msg already exists/);
+    await writeDecision(repository, true);
+    await writeDecision(repository, false);
     assert.deepEqual(await readFile(file), original);
-    assert.equal(await readDecision(repository), "unknown");
+    assert.equal(await readDecision(repository), "disabled");
 });
 
 test("relative hooks in linked worktrees can each be enabled and are all removed on disable", async (t) => {
@@ -341,13 +380,46 @@ test("a shared hooks directory does not annotate unrelated repositories", async 
     await git(second.root, "config", "core.hooksPath", shared);
     await commit(second.root, "-qm", "other repository");
     assert.equal(await message(second.root), "other repository");
-    await assert.rejects(
-        writeDecision(second.repository, true),
-        /prepare-commit-msg already exists/,
-    );
+    await writeDecision(second.repository, true);
+    await commit(second.root, "-qm", "both enabled");
+    assert.equal(await message(second.root), "both enabled\n\nAssisted-by: second/model");
     await writeDecision(first.repository, false);
     await commit(second.root, "-qm", "restored");
-    assert.equal(await message(second.root), "restored");
+    assert.equal(await message(second.root), "restored\n\nAssisted-by: second/model");
+    await writeDecision(second.repository, false);
+    await assert.rejects(readFile(await hookFile(second.root)));
+});
+
+test("existing hook failures keep their exit status and prevent attribution", async (t) => {
+    const { root, repository } = await fixture(t);
+    const file = await hookFile(root);
+    await script(file, "exit 37");
+    await writeDecision(repository, true);
+    await addModel(repository, "p/m");
+    await assert.rejects(execute(file, [path.join(repository.commonDir, "COMMIT_EDITMSG")]), {
+        code: 37,
+    });
+    await assert.rejects(commit(root, "-qm", "blocked"));
+    assert.equal(
+        await readFile(path.join(repository.commonDir, "COMMIT_EDITMSG"), "utf8"),
+        "blocked\n",
+    );
+    await writeDecision(repository, false);
+    await assert.rejects(commit(root, "-qm", "still blocked"));
+});
+
+test("existing Python hooks retain their interpreter", async (t) => {
+    const { root, repository } = await fixture(t);
+    const file = await hookFile(root);
+    await writeFile(
+        file,
+        '#!/usr/bin/env python3\nimport sys\nwith open(sys.argv[1], "a") as message:\n    message.write("python hook\\n")\n',
+    );
+    await chmod(file, 0o755);
+    await writeDecision(repository, true);
+    await addModel(repository, "p/m");
+    await commit(root, "-qm", "chained");
+    assert.equal(await message(root), "chained\npython hook\n\nAssisted-by: p/m");
 });
 
 test("installed hooks need only Git, shell and Python; corrupt settings do not suppress user hooks", async (t) => {

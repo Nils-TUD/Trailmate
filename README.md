@@ -7,7 +7,7 @@ trailers to prepared Git commit messages.
 When a repository is opened in the TUI, a native dialog offers:
 
 - **Enable:** install the Git-hook integration and remember decision.
-- **Disable:** remove the installed prepare hook and remember decision.
+- **Disable:** remove Trailmate's hook integration, restore any existing prepare hook, and remember decision.
 - **Later:** leave the preference unknown and ask next time the TUI starts.
 
 In addition, the plugin provides a TUI for status inspection and state management. Use `/trailmate`
@@ -19,6 +19,12 @@ or the **Manage Trailmate** command-palette entry to open a native menu with the
 - OpenCode 2.1.3+ (2.x). OpenCode 1.18.4+ (1.x) is supported through alternative entrypoints.
 - Git with `rev-parse --path-format=absolute` support (Git 2.31+).
 - Python 3 and a POSIX shell on PATH for installation and Git hooks; verified on Linux.
+
+Existing `prepare-commit-msg` hooks are preserved as `prepare-commit-msg.trailmate-original`
+and run first, with their original interpreter and arguments. Trailmate appends attribution
+only if the existing hook succeeds. Re-enabling does not duplicate the integration;
+disabling restores the original hook once no Trailmate integrations remain in that hook path.
+
 - Node.js 22+ and npm for **development builds and testing only**.
 
 ## Install from GitHub
