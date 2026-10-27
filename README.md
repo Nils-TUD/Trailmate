@@ -34,16 +34,17 @@ is needed.
 
 ### OpenCode 2.x (default)
 
-Add the server plugin to `~/.config/opencode/opencode.json`:
+Add the checkout directory as the server plugin in `~/.config/opencode/opencode.json`:
 
 ```json
 {
     "$schema": "https://opencode.ai/config.json",
-    "plugins": ["file:///absolute/path/to/trailmate/src/server.ts"]
+    "plugins": ["file:///absolute/path/to/trailmate"]
 }
 ```
 
-Add the terminal plugin to `~/.config/opencode/cli.json`:
+The package entrypoint resolves directly to `src/server.ts`. Add the terminal plugin's
+source entrypoint to `~/.config/opencode/cli.json`:
 
 ```json
 {

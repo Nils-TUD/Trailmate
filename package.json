@@ -4,16 +4,16 @@
     "private": true,
     "description": "Repository opt-in and automated model attribution for OpenCode",
     "type": "module",
-    "main": "./dist/server.js",
+    "main": "./src/server.ts",
     "exports": {
-        ".": "./dist/server.js",
-        "./server": "./dist/server.js",
-        "./tui": "./dist/tui.js",
-        "./server-v1": "./dist/server-v1.js",
-        "./tui-v1": "./dist/tui-v1.js"
+        ".": "./src/server.ts",
+        "./server": "./src/server.ts",
+        "./tui": "./src/tui.ts",
+        "./server-v1": "./src/server-v1.ts",
+        "./tui-v1": "./src/tui-v1.ts"
     },
     "files": [
-        "dist",
+        "src",
         "README.md",
         "docs"
     ],
