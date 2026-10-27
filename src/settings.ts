@@ -9,6 +9,7 @@ export type Decision = "unknown" | "enabled" | "disabled";
 export type Settings = Record<string, unknown> & {
     version: 1;
     enabled: boolean | null;
+    clearAfterCommit?: boolean;
     models: Record<string, string[]>;
     hooks?: { file: string }[];
 };
@@ -86,6 +87,20 @@ export async function writeDecision(repository: Repository, enabled: boolean): P
 
 export async function readHookStatus(repository: Repository): Promise<string> {
     return hookStatus(repository, await readSettings(repository));
+}
+
+export async function readClearAfterCommit(repository: Repository): Promise<boolean> {
+    return (await readSettings(repository)).clearAfterCommit !== false;
+}
+
+export async function toggleClearAfterCommit(repository: Repository): Promise<boolean> {
+    let enabled = false;
+    await updateSettings(repository, async (settings, publish) => {
+        enabled = settings.clearAfterCommit === false;
+        settings.clearAfterCommit = enabled;
+        if (settings.enabled === true) await configureHooks(repository, settings, true, publish);
+    });
+    return enabled;
 }
 
 export async function addModel(repository: Repository, model: string): Promise<void> {

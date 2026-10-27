@@ -12,7 +12,13 @@ When a repository is opened in the TUI, a native dialog offers:
 
 In addition, the plugin provides a TUI for status inspection and state management. Use `/trailmate`
 or the **Manage Trailmate** command-palette entry to open a native menu with the commands `status`,
-`enable`, `disable`, `list`, and `clear`.
+`enable`, `disable`, `list`, `clear`, and `toggle-auto-clear`.
+
+Trailmate automatically clears the committing worktree's model list after each successful
+commit by default. Choose **toggle-auto-clear** to turn this off or back on. The setting applies repository-wide,
+including linked worktrees. Failed or cancelled commits retain the list; other worktrees'
+lists are preserved. `status` shows the current setting. Clearing runs in a `post-commit`
+hook, including for commits made outside OpenCode, and requires Trailmate to be enabled.
 
 ## Requirements
 
@@ -20,10 +26,12 @@ or the **Manage Trailmate** command-palette entry to open a native menu with the
 - Git with `rev-parse --path-format=absolute` support (Git 2.31+).
 - Python 3 and a POSIX shell on PATH for installation and Git hooks; verified on Linux.
 
-Existing `prepare-commit-msg` hooks are preserved as `prepare-commit-msg.trailmate-original`
+Existing `prepare-commit-msg` and `post-commit` hooks are preserved with a `.trailmate-original` suffix
 and run first, with their original interpreter and arguments. Trailmate appends attribution
 only if the existing hook succeeds. Re-enabling does not duplicate the integration;
-disabling restores the original hook once no Trailmate integrations remain in that hook path.
+disabling restores the original hooks once no Trailmate integrations remain in that hook path.
+An existing post-commit hook runs first; auto-clear also runs if that hook fails, since
+the commit has already succeeded.
 
 - Node.js 22+ and npm for **development builds and testing only**.
 
@@ -106,6 +114,7 @@ Here is an example `settings.json`:
 {
     "version": 1,
     "enabled": true,
+    "clearAfterCommit": true,
     "models": {
         "/home/alice/project": ["openai/gpt-5"],
         "/home/alice/project-fix": ["anthropic/claude-sonnet-4-6"]

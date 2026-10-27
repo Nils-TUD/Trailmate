@@ -10,6 +10,7 @@ import {
     clearModels,
     readDecision,
     readModels,
+    readClearAfterCommit,
     settingsPath,
     writeDecision,
 } from "../dist/settings.js";
@@ -48,6 +49,7 @@ test("one JSON file stores preferences and sorted, deduplicated worktree models"
         path.join(repository.commonDir, "trailmate", "settings.json"),
     );
     assert.deepEqual(await readModels(repository), []);
+    assert.equal(await readClearAfterCommit(repository), true);
     const models = ["z/legacy", "a/vendor/model", "z/legacy"];
     await seedModels(repository, models);
     const contents = await readFile(settingsPath(repository), "utf8");
@@ -184,7 +186,7 @@ test("contention is bounded and does not delete another writer's lock", async (t
     assert.equal(await readDecision(repository), "disabled");
 });
 
-test("native management provides only status, enable, disable, list and clear", async (t) => {
+test("native management provides attribution actions and a repository-wide auto-clear toggle", async (t) => {
     const { root, repository } = await fixture(t);
     await seedModels(repository, ["existing/model"]);
     let commands;
@@ -224,7 +226,7 @@ test("native management provides only status, enable, disable, list and clear", 
     };
     registerManagement(api);
     assert.equal(commands[0].slash.name, "trailmate");
-    const actions = ["status", "enable", "disable", "list", "clear"];
+    const actions = ["status", "enable", "disable", "list", "clear", "toggle-auto-clear"];
     for (const action of actions) {
         const result = new Promise((resolve) => {
             complete = resolve;
@@ -241,6 +243,11 @@ test("native management provides only status, enable, disable, list and clear", 
         if (action === "disable") assert.equal(await readDecision(repository), "disabled");
         if (action === "list") assert.equal(message, "existing/model");
         if (action === "clear") assert.deepEqual(await readModels(repository), []);
+        if (action === "toggle-auto-clear") {
+            assert.equal(await readClearAfterCommit(repository), false);
+            assert.match(message, /disabled \(repository-wide\)/);
+            assert.equal(await readDecision(repository), "disabled");
+        }
     }
     dispose();
     assert.deepEqual(commands, []);

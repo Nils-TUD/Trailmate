@@ -10,10 +10,13 @@ const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const helper = (repository: Repository) => path.join(repository.commonDir, "trailmate", "hook.py");
 const header = "#!/bin/sh\n# trailmate hook chain\n";
 const original = (file: string) => `${file}.trailmate-original`;
+const isPostCommit = (file: string) => path.basename(file) === "post-commit";
 const previousHook = (file: string) =>
-    `[ ! -x ${quote(original(file))} ] || ${quote(original(file))} "$@" || exit $?\n`;
-const contribution = (repository: Repository) =>
-    `python3 ${quote(helper(repository))} "$@" || exit $?\n`;
+    isPostCommit(file)
+        ? `trailmate_status=0\ntrap 'exit "$trailmate_status"' 0\n[ ! -x ${quote(original(file))} ] || ${quote(original(file))} "$@" || trailmate_status=$?\n`
+        : `[ ! -x ${quote(original(file))} ] || ${quote(original(file))} "$@" || exit $?\n`;
+const contribution = (repository: Repository, file: string) =>
+    `python3 ${quote(helper(repository))}${isPostCommit(file) ? " --post-commit" : ""} "$@" || exit $?\n`;
 
 async function exists(file: string): Promise<boolean> {
     try {
@@ -25,14 +28,14 @@ async function exists(file: string): Promise<boolean> {
     }
 }
 
-async function hookFile(repository: Repository): Promise<string> {
+async function hookFile(repository: Repository, name = "prepare-commit-msg"): Promise<string> {
     const { stdout } = await execute("git", [
         "-C",
         repository.root,
         "rev-parse",
         "--path-format=absolute",
         "--git-path",
-        "hooks/prepare-commit-msg",
+        `hooks/${name}`,
     ]);
     return stdout.replace(/\n$/, "");
 }
@@ -47,8 +50,10 @@ async function writeHook(file: string, contents: string): Promise<void> {
 }
 
 export async function hookStatus(repository: Repository, settings: Settings): Promise<string> {
-    const file = await hookFile(repository);
-    return settings.hooks?.some((hook) => hook.file === file)
+    const files = await Promise.all(
+        ["prepare-commit-msg", "post-commit"].map((name) => hookFile(repository, name)),
+    );
+    return files.every((file) => settings.hooks?.some((hook) => hook.file === file))
         ? "installed"
         : "not installed in this worktree";
 }
@@ -63,42 +68,57 @@ export async function configureHooks(
     const installed = settings.hooks ?? [];
     if (enabled) {
         await execute("python3", ["--version"]);
-        const file = await hookFile(repository);
-        const hook = installed.find((hook) => hook.file === file);
-        let launcher = await currentHook(file);
-        // Upgrade the original standalone launcher without treating it as a user hook.
-        if (launcher.startsWith("#!/bin/sh\n# trailmate\nexec python3 ")) {
-            launcher =
-                header +
-                launcher.slice("#!/bin/sh\n# trailmate\nexec ".length).trimEnd() +
-                " || exit $?\n";
+        const files = new Set(
+            await Promise.all(
+                ["prepare-commit-msg", "post-commit"].map((name) => hookFile(repository, name)),
+            ),
+        );
+        // Upgrade already-enabled worktrees as well when the repository-wide
+        // option is toggled from a different worktree. Skip removed worktrees.
+        for (const { file } of installed) {
+            if (path.basename(file) === "prepare-commit-msg" && (await exists(file))) {
+                files.add(path.join(path.dirname(file), "post-commit"));
+            }
         }
-        const managed = launcher.startsWith(header);
-        if (!managed && launcher && (await exists(original(file)))) {
-            throw new Error(
-                `Cannot preserve existing hook: backup already exists: ${original(file)}`,
-            );
-        }
-        if (!managed) launcher = header;
-        if (!launcher.includes(contribution(repository))) launcher += contribution(repository);
-        if (!hook) installed.push({ file });
-
         const contents = await readFile(new URL("./hook.py", import.meta.url));
         settings.enabled = false;
         settings.hooks = installed;
         await publish();
-        await mkdir(path.dirname(file), { recursive: true });
         await writeFile(`${helper(repository)}.tmp`, contents, { mode: 0o600 });
         await rename(`${helper(repository)}.tmp`, helper(repository));
-        if (!managed && (await exists(file))) {
-            // Keep the original interpreter, permissions and contents intact, including
-            // hooks which use exec or exit. Never overwrite an existing backup.
-            if (!(await exists(original(file)))) await rename(file, original(file));
+        for (const file of files) {
+            const hook = installed.find((hook) => hook.file === file);
+            let launcher = await currentHook(file);
+            // Upgrade the original standalone launcher without treating it as a user hook.
+            if (launcher.startsWith("#!/bin/sh\n# trailmate\nexec python3 ")) {
+                launcher =
+                    header +
+                    launcher.slice("#!/bin/sh\n# trailmate\nexec ".length).trimEnd() +
+                    " || exit $?\n";
+            }
+            const managed = launcher.startsWith(header);
+            if (!managed && launcher && (await exists(original(file)))) {
+                throw new Error(
+                    `Cannot preserve existing hook: backup already exists: ${original(file)}`,
+                );
+            }
+            if (!managed) launcher = header;
+            if (!launcher.includes(contribution(repository, file)))
+                launcher += contribution(repository, file);
+            if (!hook) installed.push({ file });
+
+            await publish();
+            await mkdir(path.dirname(file), { recursive: true });
+            if (!managed && (await exists(file))) {
+                // Keep the original interpreter, permissions and contents intact, including
+                // hooks which use exec or exit. Never overwrite an existing backup.
+                if (!(await exists(original(file)))) await rename(file, original(file));
+            }
+            if ((await exists(original(file))) && !launcher.includes(previousHook(file))) {
+                launcher = header + previousHook(file) + launcher.slice(header.length);
+            }
+            await writeHook(file, launcher);
         }
-        if ((await exists(original(file))) && !launcher.includes(previousHook(file))) {
-            launcher = header + previousHook(file) + launcher.slice(header.length);
-        }
-        await writeHook(file, launcher);
         settings.enabled = true;
     } else {
         settings.enabled = false;
@@ -106,7 +126,7 @@ export async function configureHooks(
         for (const { file } of installed) {
             const launcher = await currentHook(file);
             if (launcher.startsWith(header)) {
-                const remaining = launcher.replace(contribution(repository), "");
+                const remaining = launcher.replace(contribution(repository, file), "");
                 const base = header + ((await exists(original(file))) ? previousHook(file) : "");
                 if (remaining !== base) {
                     await writeHook(file, remaining);

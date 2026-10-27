@@ -1,10 +1,12 @@
-"""Prepare Assisted-by trailers; Python 3 standard library only."""
+"""Prepare Assisted-by trailers and clear committed models; standard library only."""
 
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
+import time
 
 
 def git(*args, data=None, env=None):
@@ -21,12 +23,54 @@ def config(key, default):
     return result.stdout.decode().rstrip("\n") if result.returncode == 0 else default
 
 
-def prepare(args):
+def repository():
     common = Path(os.fsdecode(
         git("rev-parse", "--path-format=absolute", "--git-common-dir")
     ).rstrip("\n")).resolve()
     # A custom hooks directory can be shared by unrelated repositories.
     if common != Path(__file__).resolve().parent.parent:
+        return None
+    return common
+
+
+def clear_after_commit():
+    common = repository()
+    if common is None:
+        return
+    root = os.path.realpath(os.fsdecode(git("rev-parse", "--show-toplevel")).rstrip("\n"))
+    file = common / "trailmate/settings.json"
+    lock_file = Path(str(file) + ".lock")
+    deadline = time.monotonic() + 2
+    while True:
+        try:
+            lock = os.open(lock_file, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            break
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Timed out waiting for Trailmate lock: " + str(lock_file))
+            time.sleep(0.025)
+    temporary = None
+    try:
+        settings = json.loads(file.read_text(encoding="utf-8"))
+        if settings["enabled"] is not True or settings.get("clearAfterCommit") is False:
+            return
+        settings["models"].pop(root, None)
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=file.parent,
+                                         prefix=file.name + ".", suffix=".tmp", delete=False) as output:
+            temporary = Path(output.name)
+            json.dump(settings, output, indent=2)
+            output.write("\n")
+        os.replace(temporary, file)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+        os.close(lock)
+        lock_file.unlink()
+
+
+def prepare(args):
+    common = repository()
+    if common is None:
         return
 
     settings = json.loads((common / "trailmate/settings.json").read_text(encoding="utf-8"))
@@ -68,6 +112,9 @@ def prepare(args):
 
 if __name__ == "__main__":
     try:
-        prepare(sys.argv[1:])
+        if sys.argv[1:] == ["--post-commit"]:
+            clear_after_commit()
+        else:
+            prepare(sys.argv[1:])
     except Exception as error:
         print("Trailmate: " + str(error), file=sys.stderr)

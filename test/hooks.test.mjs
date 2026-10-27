@@ -11,6 +11,7 @@ import {
     readDecision,
     readHookStatus,
     readModels,
+    toggleClearAfterCommit,
     settingsPath,
     writeDecision,
 } from "../dist/settings.js";
@@ -31,7 +32,7 @@ const hookFile = async (root) =>
         )
     ).stdout.replace(/\n$/, "");
 
-async function fixture(t, separate = false) {
+async function fixture(t, separate = false, autoClear = false) {
     const directory = await mkdtemp(path.join(tmpdir(), "trailmate-hooks-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const root = path.join(directory, "repository's files with spaces");
@@ -46,6 +47,8 @@ async function fixture(t, separate = false) {
     await git(root, "config", "user.email", "test@example.com");
     await git(root, "config", "commit.gpgsign", "false");
     const repository = await discoverRepository(root);
+    // Most hook tests retain models across commits to inspect attribution behavior.
+    if (!autoClear) await toggleClearAfterCommit(repository);
     return { root, directory, repository };
 }
 
@@ -54,7 +57,7 @@ async function script(file, contents) {
     await chmod(file, 0o755);
 }
 
-test("enable installs only prepare-commit-msg, repair and disable leave Git config alone", async (t) => {
+test("enable installs prepare and post hooks, repair and disable leave Git config alone", async (t) => {
     const { root, repository } = await fixture(t);
     await git(root, "config", "core.hooksPath", ".user-hooks");
     await writeDecision(repository, true);
@@ -66,7 +69,7 @@ test("enable installs only prepare-commit-msg, repair and disable leave Git conf
     await writeDecision(repository, true);
     await addModel(repository, "provider/model");
     const file = await hookFile(root);
-    assert.deepEqual(await readdir(path.dirname(file)), ["prepare-commit-msg"]);
+    assert.deepEqual(await readdir(path.dirname(file)), ["post-commit", "prepare-commit-msg"]);
     await rm(file);
     await writeDecision(repository, true);
     await commit(root, "-qm", "first");
@@ -448,4 +451,117 @@ test("installed hooks need only Git, shell and Python; corrupt settings do not s
     assert.match(result.stderr, /Trailmate:/);
     await readFile(path.join(root, "user-hook-ran"));
     assert.equal(await message(root), "corrupt settings");
+});
+
+test("auto-clear defaults on, retains models on failure, and clears only after attribution", async (t) => {
+    const { root, repository } = await fixture(t, false, true);
+    await writeDecision(repository, true);
+    await addModel(repository, "p/m");
+    const reject = path.join(path.dirname(await hookFile(root)), "commit-msg");
+    await script(reject, "exit 1");
+    await assert.rejects(commit(root, "-qm", "rejected"));
+    assert.deepEqual(await readModels(repository), ["p/m"]);
+    await rm(reject);
+    await commit(root, "-qm", "cleared");
+    assert.equal(await message(root), "cleared\n\nAssisted-by: p/m");
+    assert.deepEqual(await readModels(repository), []);
+    await commit(root, "-qm", "next commit");
+    assert.equal(await message(root), "next commit");
+    assert.equal(await toggleClearAfterCommit(repository), false);
+    await addModel(repository, "p/new");
+    await commit(root, "-qm", "explicitly disabled");
+    assert.deepEqual(await readModels(repository), ["p/new"]);
+});
+
+test("auto-clear is repository-wide but preserves other worktrees and settings", async (t) => {
+    const { root, directory, repository } = await fixture(t, true);
+    await commit(root, "-qm", "base");
+    const linked = path.join(directory, "linked worktree");
+    await git(root, "worktree", "add", "-qb", "linked", linked);
+    const other = await discoverRepository(linked);
+    await writeDecision(repository, true);
+    await toggleClearAfterCommit(other);
+    await addModel(repository, "main/model");
+    await addModel(other, "linked/model");
+    await commit(linked, "-qm", "linked");
+    assert.equal(await message(linked), "linked\n\nAssisted-by: linked/model");
+    assert.deepEqual(await readModels(other), []);
+    assert.deepEqual(await readModels(repository), ["main/model"]);
+    const settings = JSON.parse(await readFile(settingsPath(repository), "utf8"));
+    assert.equal(settings.clearAfterCommit, true);
+    assert.equal(settings.enabled, true);
+    assert.equal(settings.hooks.length, 2);
+    await commit(root, "-qm", "main");
+    assert.deepEqual(await readModels(repository), []);
+});
+
+test("post-commit chaining clears even when the original fails and restores the original", async (t) => {
+    const { root, repository } = await fixture(t);
+    const file = path.join(path.dirname(await hookFile(root)), "post-commit");
+    await script(file, "touch post-commit-ran\nexit 37");
+    const contents = await readFile(file);
+    const mode = (await lstat(file)).mode;
+    await writeDecision(repository, true);
+    await toggleClearAfterCommit(repository);
+    await writeDecision(repository, true);
+    await addModel(repository, "p/m");
+    await commit(root, "-qm", "successful");
+    await readFile(path.join(root, "post-commit-ran"));
+    assert.deepEqual(await readModels(repository), []);
+    await assert.rejects(execute(file, [], { cwd: root, env }), { code: 37 });
+    await writeDecision(repository, false);
+    assert.deepEqual(await readFile(file), contents);
+    assert.equal((await lstat(file)).mode, mode);
+    await assert.rejects(readFile(`${file}.trailmate-original`));
+});
+
+test("post-commit waits for the settings lock and preserves concurrent updates", async (t) => {
+    const { root, repository } = await fixture(t);
+    await writeDecision(repository, true);
+    await toggleClearAfterCommit(repository);
+    await addModel(repository, "p/m");
+    const file = settingsPath(repository);
+    const lock = `${file}.lock`;
+    await writeFile(lock, "held");
+    const committing = commit(root, "-qm", "concurrent");
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const settings = JSON.parse(await readFile(file, "utf8"));
+    settings.extra = { preserved: true };
+    settings.models["other/worktree"] = ["other/model"];
+    await writeFile(file, JSON.stringify(settings));
+    await rm(lock);
+    await committing;
+    const updated = JSON.parse(await readFile(file, "utf8"));
+    assert.deepEqual(updated.extra, { preserved: true });
+    assert.deepEqual(updated.models, { "other/worktree": ["other/model"] });
+    assert.deepEqual(await readdir(path.dirname(file)), ["hook.py", "settings.json"]);
+});
+
+test("toggling auto-clear upgrades older installations in all known worktrees", async (t) => {
+    const { root, directory, repository } = await fixture(t);
+    await commit(root, "-qm", "base");
+    await git(root, "config", "core.hooksPath", ".hooks");
+    const linked = path.join(directory, "linked");
+    await git(root, "worktree", "add", "-qb", "linked", linked);
+    const other = await discoverRepository(linked);
+    await writeDecision(repository, true);
+    await writeDecision(other, true);
+    // Simulate settings and hooks from before post-commit support.
+    const settings = JSON.parse(await readFile(settingsPath(repository), "utf8"));
+    for (const { file } of settings.hooks) {
+        if (path.basename(file) === "post-commit") await rm(file);
+    }
+    settings.hooks = settings.hooks.filter(({ file }) => path.basename(file) !== "post-commit");
+    await writeFile(settingsPath(repository), JSON.stringify(settings));
+    await toggleClearAfterCommit(other);
+    assert.equal(await readHookStatus(repository), "installed");
+    assert.equal(await readHookStatus(other), "installed");
+    await addModel(repository, "main/model");
+    await commit(root, "-qm", "upgraded");
+    assert.equal(await message(root), "upgraded\n\nAssisted-by: main/model");
+    assert.deepEqual(await readModels(repository), []);
+    await writeDecision(other, false);
+    for (const location of [root, linked]) {
+        assert.deepEqual(await readdir(path.join(location, ".hooks")), []);
+    }
 });
