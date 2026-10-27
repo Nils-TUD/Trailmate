@@ -39,16 +39,7 @@ Add the checkout directory as the server plugin in `~/.config/opencode/opencode.
 ```json
 {
     "$schema": "https://opencode.ai/config.json",
-    "plugins": ["file:///absolute/path/to/trailmate"]
-}
-```
-
-The package entrypoint resolves directly to `src/server.ts`. Add the terminal plugin's
-source entrypoint to `~/.config/opencode/cli.json`:
-
-```json
-{
-    "plugins": ["file:///absolute/path/to/trailmate/src/tui.ts"]
+    "plugins": ["file:///absolute/path/to/trailmate/src"]
 }
 ```
 
