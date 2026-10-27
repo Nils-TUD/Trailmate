@@ -139,8 +139,22 @@ test("-F, amend, sorted models and duplicate trailers", async (t) => {
     assert.equal(first.match(/Assisted-by: a\/model/g).length, 1);
     assert.ok(first.includes("Signed-off-by: Test <test@example.com>"));
     assert.ok(first.endsWith("Assisted-by: z/model"));
+    await addModel(repository, "new/model");
     await commit(root, "--amend", "--no-edit", "-q");
     assert.equal(await message(root), first);
+});
+
+test("amending an unattributed commit leaves its message unchanged", async (t) => {
+    const { root, repository } = await fixture(t);
+    await commit(root, "-qm", "original");
+    await writeDecision(repository, true);
+    await addModel(repository, "p/m");
+    await commit(root, "--amend", "--no-edit", "-q");
+    assert.equal(await message(root), "original");
+    await execute("git", ["-C", root, "commit", "--allow-empty", "--amend", "-q"], {
+        env: { ...env, GIT_EDITOR: ":" },
+    });
+    assert.equal(await message(root), "original");
 });
 
 test("unrelated hooks remain untouched and keep their normal behavior", async (t) => {

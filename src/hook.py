@@ -80,7 +80,8 @@ def prepare(args):
     root = os.path.realpath(os.fsdecode(git("rev-parse", "--show-toplevel")).rstrip("\n"))
     models = settings["models"].get(root, [])
 
-    if not models or (len(args) > 1 and args[1] in ("merge", "squash")):
+    # Git uses "commit" when reusing a message, including --amend.
+    if not models or (len(args) > 1 and args[1] in ("merge", "squash", "commit")):
         return
 
     git_dir = Path(os.fsdecode(git("rev-parse", "--absolute-git-dir")).rstrip("\n"))
