@@ -220,13 +220,21 @@ test("native management provides attribution actions and a repository-wide auto-
                 replace: (render) => {
                     dialog = render();
                 },
-                clear: () => {},
+                clear: () => { },
             },
         },
     };
-    registerManagement(api);
+    registerManagement(
+        api,
+        async (selected) => {
+            assert.deepEqual(selected, repository);
+            await writeDecision(selected, true);
+            complete({ message: "Setup completed" });
+        },
+        () => false,
+    );
     assert.equal(commands[0].slash.name, "trailmate");
-    const actions = ["status", "enable", "disable", "list", "clear", "toggle-auto-clear"];
+    const actions = ["status", "setup", "list", "clear", "toggle-auto-clear"];
     for (const action of actions) {
         const result = new Promise((resolve) => {
             complete = resolve;
@@ -239,14 +247,13 @@ test("native management provides attribution actions and a repository-wide auto-
         dialog.onSelect({ value: action });
         const { message } = await result;
         if (action === "status") assert.match(message, /^Trailmate: unknown\n/);
-        if (action === "enable") assert.equal(await readDecision(repository), "enabled");
-        if (action === "disable") assert.equal(await readDecision(repository), "disabled");
+        if (action === "setup") assert.equal(await readDecision(repository), "enabled");
         if (action === "list") assert.equal(message, "existing/model");
         if (action === "clear") assert.deepEqual(await readModels(repository), []);
         if (action === "toggle-auto-clear") {
             assert.equal(await readClearAfterCommit(repository), false);
             assert.match(message, /disabled \(repository-wide\)/);
-            assert.equal(await readDecision(repository), "disabled");
+            assert.equal(await readDecision(repository), "enabled");
         }
     }
     dispose();

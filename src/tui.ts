@@ -2,6 +2,8 @@ import type { Plugin } from "@opencode/plugin/tui";
 import { actions, runAction, type Action } from "./actions.js";
 import { OptIn, type Choice } from "./opt-in.js";
 import { discoverRepository } from "./repository.js";
+import { setupRepositories } from "./setup.js";
+import type { Repository } from "./repository.js";
 
 export default {
     id: "trailmate",
@@ -10,6 +12,7 @@ export default {
         const failed = new Set<string>();
         let disposed = false;
         let dialogDirectory: string | undefined;
+        let setupRunning = false;
         const directory = () => (ctx.location ?? ctx.data.location.default()).directory;
         const current = (path: string) => !disposed && directory() === path;
         const error = (error: unknown) => {
@@ -29,7 +32,46 @@ export default {
                 dialogDirectory = undefined;
             }
         };
+        const setup = async (
+            path: string,
+            repository: Repository,
+            automatic = false,
+        ): Promise<Choice> => {
+            if (setupRunning) return "later";
+            setupRunning = true;
+            let lastProgress = 0;
+            try {
+                return await setupRepositories(repository, {
+                    automatic,
+                    current: () => current(path),
+                    select: (title, options) => select(path, title, options),
+                    close: () => {
+                        if (dialogDirectory === path) ctx.ui.dialog.clear();
+                    },
+                    progress: (directory, found) => {
+                        if (!current(path) || Date.now() - lastProgress < 1000) return;
+                        lastProgress = Date.now();
+                        ctx.ui.toast.show({
+                            title: `Trailmate: ${found} repositories found`,
+                            message: directory,
+                        });
+                    },
+                    report: async (message) => {
+                        if (!current(path)) return;
+                        dialogDirectory = path;
+                        try {
+                            await ctx.ui.dialog.alert({ title: "Trailmate setup", message });
+                        } finally {
+                            dialogDirectory = undefined;
+                        }
+                    },
+                });
+            } finally {
+                setupRunning = false;
+            }
+        };
         const manage = async () => {
+            if (setupRunning) return;
             const path = directory();
             try {
                 const action = await select<Action>(
@@ -41,6 +83,10 @@ export default {
                 const repository = await discoverRepository(path);
                 if (!current(path)) return;
                 if (!repository) throw new Error("Trailmate requires a Git worktree");
+                if (action === "setup") {
+                    await setup(path, repository);
+                    return;
+                }
                 const message = await runAction(repository, action);
                 if (current(path)) {
                     dialogDirectory = path;
@@ -71,29 +117,12 @@ export default {
         const tick = async () => {
             const path = directory();
             if (dialogDirectory && dialogDirectory !== path) ctx.ui.dialog.clear();
-            if (disposed || !path || dialogDirectory || failed.has(path)) return;
+            if (disposed || !path || dialogDirectory || setupRunning || failed.has(path)) return;
             try {
                 await optIn.check(
                     path,
                     () => current(path) && !dialogDirectory,
-                    async (repository) =>
-                        (await select<Choice>(path, `Enable Trailmate? ${repository.root}`, [
-                            {
-                                title: "Enable",
-                                value: "enable",
-                                description: "Track models and install Assisted-by Git trailers.",
-                            },
-                            {
-                                title: "Disable",
-                                value: "disable",
-                                description: "Disable attribution; do not ask again.",
-                            },
-                            {
-                                title: "Later",
-                                value: "later",
-                                description: "Ask next time OpenCode starts.",
-                            },
-                        ])) ?? "later",
+                    (repository) => setup(path, repository, true),
                 );
             } catch (cause) {
                 failed.add(path);

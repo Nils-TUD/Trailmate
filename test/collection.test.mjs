@@ -117,3 +117,22 @@ test("independent collector processes merge model additions without losing setti
     await Promise.all([run("first/model"), run("second/model")]);
     assert.deepEqual(await readModels(repository), ["first/model", "second/model"]);
 });
+
+test("file paths route attribution to enabled children even when the parent is disabled", async (t) => {
+    const { root, repository, info, message, patch } = await fixture(t);
+    const child = path.join(root, "child");
+    await mkdir(child);
+    await execute("git", ["-C", child, "init", "-q"]);
+    const nested = await discoverRepository(child);
+    await writeDecision(repository, false);
+    await writeDecision(nested, true);
+    await message(info("child-edit"));
+    await patch("child-patch", "child-edit", ["child/file.txt"]);
+    assert.deepEqual(await readModels(nested), ["provider/child-edit"]);
+    assert.deepEqual(await readModels(repository), []);
+    await writeDecision(repository, true);
+    await message(info("pointer"));
+    await patch("pointer-patch", "pointer", ["child"]);
+    assert.deepEqual(await readModels(repository), ["provider/pointer"]);
+    assert.deepEqual(await readModels(nested), ["provider/child-edit"]);
+});

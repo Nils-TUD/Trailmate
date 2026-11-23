@@ -2,24 +2,29 @@ import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
 import { OptIn, type Choice } from "./opt-in.js";
 import type { Repository } from "./repository.js";
 import { registerManagement } from "./management-v1.js";
+import { setupRepositories, type SetupOption } from "./setup.js";
 
 const tui: TuiPlugin = async (api) => {
-    registerManagement(api);
     const optIn = new OptIn();
     // Avoid repeating the same operational error on every polling tick.
     const failed = new Set<string>();
 
     let cancelPrompt: (() => void) | undefined;
     let promptDirectory: string | undefined;
+    let setupDirectory: string | undefined;
 
     // Keep dialog rendering and settlement separate from the polling checks.
-    const prompt = (directory: string, repository: Repository): Promise<Choice> => {
+    const select = (
+        directory: string,
+        title: string,
+        options: SetupOption[],
+    ): Promise<string | undefined> => {
         return new Promise((resolve) => {
             let settled = false;
 
             // Clearing a dialog also invokes its onClose callback. Settle first
             // so that callback cannot replace an explicit choice with Later.
-            const finish = (choice: Choice, close: boolean) => {
+            const finish = (choice: string | undefined, close: boolean) => {
                 if (settled) return;
 
                 settled = true;
@@ -32,43 +37,83 @@ const tui: TuiPlugin = async (api) => {
             };
 
             const render = () =>
-                api.ui.DialogSelect<Choice>({
-                    title: `Enable Trailmate? ${repository.root}`,
-                    options: [
-                        {
-                            title: "Enable",
-                            value: "enable",
-                            description:
-                                "Save opt-in for model tracking and Assisted-by Git trailers " +
-                                "(coming in later phases).",
-                        },
-                        {
-                            title: "Disable",
-                            value: "disable",
-                            description:
-                                "Keep attribution disabled for this repository; do not ask again.",
-                        },
-                        {
-                            title: "Later",
-                            value: "later",
-                            description: "Ask next time OpenCode starts.",
-                        },
-                    ],
+                api.ui.DialogSelect<string>({
+                    title,
+                    options,
                     onSelect: ({ value }) => finish(value, true),
                 });
 
             promptDirectory = directory;
-            cancelPrompt = () => finish("later", true);
+            cancelPrompt = () => finish(undefined, true);
 
-            api.ui.dialog.replace(render, () => finish("later", false));
+            api.ui.dialog.replace(render, () => finish(undefined, false));
         });
     };
+
+    const prompt = async (
+        directory: string,
+        repository: Repository,
+        automatic = false,
+    ): Promise<Choice> => {
+        if (setupDirectory) return "later";
+        setupDirectory = directory;
+        let lastProgress = 0;
+        const current = () => !api.lifecycle.signal.aborted && api.state.path.directory === directory;
+        try {
+            return await setupRepositories(repository, {
+                automatic,
+                current,
+                select: (title, options) => select(directory, title, options),
+                close: () => cancelPrompt?.(),
+                progress: (path, found) => {
+                    if (!current() || Date.now() - lastProgress < 1000) return;
+                    lastProgress = Date.now();
+                    api.ui.toast({ title: `Trailmate: ${found} repositories found`, message: path });
+                },
+                report: async (message) => {
+                    if (!current()) return;
+                    await new Promise<void>((resolve) => {
+                        let settled = false;
+                        const finish = (close: boolean) => {
+                            if (settled) return;
+                            settled = true;
+                            cancelPrompt = undefined;
+                            promptDirectory = undefined;
+                            if (close) api.ui.dialog.clear();
+                            resolve();
+                        };
+                        promptDirectory = directory;
+                        cancelPrompt = () => finish(true);
+                        api.ui.dialog.replace(
+                            () =>
+                                api.ui.DialogAlert({
+                                    title: "Trailmate setup",
+                                    message,
+                                    onConfirm: () => finish(true),
+                                }),
+                            () => finish(false),
+                        );
+                    });
+                },
+            });
+        } finally {
+            setupDirectory = undefined;
+        }
+    };
+
+    registerManagement(
+        api,
+        (repository) => prompt(api.state.path.directory, repository),
+        () => setupDirectory !== undefined,
+    );
 
     const tick = async () => {
         const directory = api.state.path.directory;
 
         // An old repository's dialog must not survive a workspace switch.
         if (cancelPrompt && directory !== promptDirectory) cancelPrompt();
+
+        if (setupDirectory) return;
 
         if (!api.state.ready || !directory || api.ui.dialog.open || failed.has(directory)) return;
 
@@ -79,7 +124,7 @@ const tui: TuiPlugin = async (api) => {
                     !api.lifecycle.signal.aborted &&
                     api.state.path.directory === directory &&
                     !api.ui.dialog.open,
-                (repository) => prompt(directory, repository),
+                (repository) => prompt(directory, repository, true),
             );
         } catch (error) {
             failed.add(directory);

@@ -1,10 +1,15 @@
 import type { TuiPlugin } from "@opencode-ai/plugin/tui";
 import { discoverRepository } from "./repository.js";
 import { actions, runAction, type Action } from "./actions.js";
+import type { Repository } from "./repository.js";
 
 type Api = Parameters<TuiPlugin>[0];
 
-export function registerManagement(api: Api): void {
+export function registerManagement(
+    api: Api,
+    setup: (repository: Repository) => Promise<unknown>,
+    busy: () => boolean,
+): void {
     const report = (result: string) => {
         api.ui.dialog.replace(() =>
             api.ui.DialogAlert({
@@ -16,6 +21,7 @@ export function registerManagement(api: Api): void {
     };
 
     const open = () => {
+        if (busy()) return;
         const directory = api.state.path.directory;
         const run = async (action: Action) => {
             try {
@@ -24,6 +30,11 @@ export function registerManagement(api: Api): void {
 
                 // Never apply an old dialog's changes to a newly selected workspace.
                 if (api.lifecycle.signal.aborted || api.state.path.directory !== directory) return;
+                if (action === "setup") {
+                    api.ui.dialog.clear();
+                    await setup(repository);
+                    return;
+                }
                 const result = await runAction(repository, action);
                 if (!api.lifecycle.signal.aborted && api.state.path.directory === directory) {
                     report(result);

@@ -77,8 +77,8 @@ test("V2 collects changed steps, including failed and subagent steps, and stops 
         },
         tool: {
             hook: async (name, callback) => {
-                assert.equal(name, "execute.before");
-                boundary = callback;
+                assert.ok(["execute.before", "execute.after"].includes(name));
+                if (name === "execute.before") boundary = callback;
             },
         },
         event: {
@@ -95,7 +95,7 @@ test("V2 collects changed steps, including failed and subagent steps, and stops 
     });
     t.after(cleanup);
     await ready;
-    await boundary();
+    await boundary({ sessionID: "session", messageID: "main", id: "boundary" });
     assert.deepEqual(await readModels(repository), [
         "provider/child",
         "provider/failed",
@@ -113,7 +113,7 @@ test("V1 adapter still records patches through its SDK client", async (t) => {
     const hooks = await v1.server({
         directory: root,
         client: {
-            app: { log: async () => {} },
+            app: { log: async () => { } },
             session: {
                 message: async ({ path }) => ({
                     data: {
@@ -147,7 +147,7 @@ test("V1 adapter still records patches through its SDK client", async (t) => {
             },
         },
     });
-    await hooks["tool.execute.before"]();
+    await hooks["tool.execute.before"]({ sessionID: "session", callID: "next", tool: "read" }, { args: {} });
     assert.deepEqual(await readModels(repository), ["v1/model"]);
 });
 
@@ -157,12 +157,13 @@ test("V2 TUI enables attribution and exposes native management commands", async 
     let command;
     const alerts = [];
     const errors = [];
-    const choices = ["enable", "status", "disable", "status"];
+    const choices = ["enable", "status", "setup", "disable", "status"];
+    let finishDiscovery;
     t.mock.method(globalThis, "setInterval", (callback) => {
         tick = callback;
         return 1;
     });
-    t.mock.method(globalThis, "clearInterval", () => {});
+    t.mock.method(globalThis, "clearInterval", () => { });
     const cleanup = tui.setup({
         location: { directory: root },
         keymap: {
@@ -172,26 +173,34 @@ test("V2 TUI enables attribution and exposes native management commands", async 
         },
         ui: {
             dialog: {
-                select: async () => choices.shift(),
+                select: async ({ title }) => title === "Discovering Git repositories…"
+                    ? new Promise((resolve) => { finishDiscovery = resolve; })
+                    : choices.shift(),
                 alert: async (options) => {
                     alerts.push(options.message);
                 },
-                clear: () => {},
+                clear: () => finishDiscovery?.(),
             },
-            toast: { show: (options) => errors.push(options.message) },
+            toast: {
+                show: (options) => {
+                    if (options.variant === "error") errors.push(options.message);
+                }
+            },
         },
     });
     t.after(cleanup);
     tick();
     // The timer starts asynchronous repository discovery and hook installation.
-    for (let i = 0; i < 100 && (await readDecision(repository)) !== "enabled"; i++) {
+    for (let i = 0; i < 100 && !alerts.length; i++) {
         await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.equal(await readDecision(repository), "enabled");
     assert.equal(command.slash.name, "trailmate");
     assert.equal(command.palette, true);
+    assert.match(alerts[0], /Enabled: \./);
+    await new Promise((resolve) => setImmediate(resolve));
     await command.run();
-    assert.match(alerts[0], /Trailmate: enabled/);
+    assert.match(alerts[1], /Trailmate: enabled/);
     await command.run();
     assert.equal(await readDecision(repository), "disabled");
     assert.equal(await readHookStatus(repository), "not installed in this worktree");
@@ -207,7 +216,7 @@ test("V2 TUI closes pending opt-in on workspace change and disposal without savi
         tick = callback;
         return 1;
     });
-    t.mock.method(globalThis, "clearInterval", () => {});
+    t.mock.method(globalThis, "clearInterval", () => { });
     for (const reason of ["switch", "dispose"]) {
         let location = { directory: root };
         let choose;
@@ -220,7 +229,7 @@ test("V2 TUI closes pending opt-in on workspace change and disposal without savi
             get location() {
                 return location;
             },
-            keymap: { layer: () => {} },
+            keymap: { layer: () => { } },
             ui: {
                 dialog: {
                     select: () =>

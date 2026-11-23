@@ -1,7 +1,7 @@
 import { discoverRepository, type Repository } from "./repository.js";
-import { readDecision, writeDecision } from "./settings.js";
+import { readDecision, readSetupComplete, writeDecision } from "./settings.js";
 
-export type Choice = "enable" | "disable" | "later";
+export type Choice = "enable" | "disable" | "later" | "configured";
 
 /** UI-independent coordinator; one outstanding prompt per TUI instance. */
 export class OptIn {
@@ -30,16 +30,17 @@ export class OptIn {
             if (!repository || this.attempted.has(repository.commonDir)) return;
 
             const decision = await readDecision(repository);
+            const setupComplete = await readSetupComplete(repository);
 
             // Discovery and file reads may finish after a directory change or shutdown.
             if (!current()) return;
-            if (decision !== "unknown") return;
+            if (decision !== "unknown" || setupComplete) return;
 
             this.attempted.add(repository.commonDir);
 
             const choice = await prompt(repository);
 
-            if (!current() || choice === "later") return;
+            if (!current() || choice === "later" || choice === "configured") return;
 
             // Another TUI may have decided while this dialog was open.
             if ((await readDecision(repository)) !== "unknown") return;
