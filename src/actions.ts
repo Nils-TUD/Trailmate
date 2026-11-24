@@ -2,7 +2,6 @@ import path from "node:path";
 import { discoverRepository, type Repository } from "./repository.js";
 import { contains } from "./discovery.js";
 import {
-    clearModels,
     readDecision,
     readHookStatus,
     readModels,
@@ -22,15 +21,11 @@ export type Action = (typeof actions)[number];
 
 export async function runAction(
     repository: Repository,
-    action: Exclude<Action, "setup">,
+    action: Exclude<Action, "setup" | "clear">,
 ): Promise<string> {
     if (action === "toggle-auto-clear") {
         const enabled = await toggleClearAfterCommit(repository);
         return `Clear models after commit: ${enabled ? "enabled" : "disabled"} (repository-wide).`;
-    }
-    if (action === "clear") {
-        await clearModels(repository);
-        return "Model attribution cleared.";
     }
     const models = (await readModels(repository)).join("\n") || "(no models)";
     const children: string[] = [];

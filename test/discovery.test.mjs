@@ -8,7 +8,8 @@ import { test } from "node:test";
 import { discoverRepository } from "../dist/repository.js";
 import { discoverSubmodules, scanRepositories } from "../dist/discovery.js";
 import { setupRepositories } from "../dist/setup.js";
-import { readDecision, readSetupComplete, writeDecision } from "../dist/settings.js";
+import { clearRepositories } from "../dist/clear.js";
+import { addModel, markSetupComplete, readDecision, readModels, readSetupComplete, writeDecision } from "../dist/settings.js";
 
 const execute = promisify(execFile);
 const git = (cwd, ...args) => execute("git", ["-C", cwd, ...args]);
@@ -210,4 +211,105 @@ test("a location switch during discovery exits instead of reopening setup", asyn
     assert.equal(await setupRepositories(repository, ui), "later");
     assert.equal(titles.length, 1);
     assert.equal(await readDecision(repository), "unknown");
+});
+
+test("clear refreshes after individual clears and closes after confirmed bulk clear", async (t) => {
+    const { root, repository } = await fixture(t);
+    const nestedPath = path.join(root, "nested");
+    await mkdir(nestedPath);
+    await git(nestedPath, "init", "-q");
+    const nested = await discoverRepository(nestedPath);
+    for (const target of [repository, nested]) {
+        await writeDecision(target, true);
+        await addModel(target, "provider/model");
+    }
+
+    const notifications = [];
+    const replies = ["scan", nestedPath, root, "all", undefined, "all", "confirm"];
+    const menus = [];
+    const ui = setupHost([], []);
+    const select = ui.select;
+    ui.select = async (title, options) => {
+        if (title === "Discovering Git repositories…") return select(title, options);
+        assert.ok(replies.length, `Unexpected dialog: ${title}`);
+        if (title === "Clear pending attribution") menus.push(options);
+        const reply = replies.shift();
+        if (title.startsWith("Clear attribution in all")) {
+            if (!reply) {
+                await addModel(repository, "provider/new");
+                await addModel(nested, "provider/new");
+            } else {
+                assert.deepEqual(await readModels(repository), ["provider/new"]);
+                assert.deepEqual(await readModels(nested), ["provider/new"]);
+            }
+        }
+        return reply;
+    };
+    ui.notify = (message) => notifications.push(message);
+
+    assert.equal(await clearRepositories(repository, ui), "done");
+    assert.equal(replies.length, 0);
+    assert.equal(menus[0].some(({ value }) => value === nestedPath), false);
+    assert.match(menus[1].find(({ value }) => value === nestedPath).description, /1 pending model/);
+    assert.match(menus[2].find(({ value }) => value === nestedPath).description, /0 pending models/);
+    assert.match(menus[3].find(({ value }) => value === root).description, /0 pending models/);
+    assert.match(notifications.at(-1), /2 of 2 listed worktrees/);
+    assert.deepEqual(await readModels(repository), []);
+    assert.deepEqual(await readModels(nested), []);
+    assert.equal(await readDecision(nested), "enabled");
+    assert.equal(await readSetupComplete(repository), false);
+});
+
+test("canceling a clear scan returns to the clear list without changing attribution", async (t) => {
+    const { repository } = await fixture(t);
+    await writeDecision(repository, true);
+    await addModel(repository, "provider/model");
+    const titles = [];
+    const ui = setupHost(["scan", undefined], [], titles);
+    const select = ui.select;
+    let discoveries = 0;
+    ui.select = (title, options) => {
+        if (title === "Discovering Git repositories…" && ++discoveries === 2) {
+            return Promise.resolve(undefined);
+        }
+        return select(title, options);
+    };
+    ui.notify = () => assert.fail("Nothing should have been cleared");
+
+    assert.equal(await clearRepositories(repository, ui), "back");
+    assert.equal(titles.filter((title) => title === "Clear pending attribution").length, 2);
+    assert.deepEqual(await readModels(repository), ["provider/model"]);
+});
+
+test("clear includes valid cached children without scanning for unknown ones", async (t) => {
+    const { root, directory, repository } = await fixture(t);
+    const known = path.join(root, "known");
+    const unknown = path.join(root, "unknown");
+    const stale = path.join(root, "stale");
+    const outside = path.join(directory, "outside");
+    for (const target of [known, unknown, stale, outside]) await mkdir(target);
+    for (const target of [known, unknown, outside]) {
+        await git(target, "init", "-q");
+        const child = await discoverRepository(target);
+        await writeDecision(child, true);
+        await addModel(child, "provider/model");
+    }
+    await markSetupComplete(repository, [known, known, stale, outside]);
+
+    const ui = setupHost(["all", "confirm"], []);
+    const select = ui.select;
+    ui.select = (title, options) => {
+        if (title === "Clear pending attribution") {
+            assert.deepEqual(options.map(({ value }) => value), [root, known, "all", "scan", "cancel"]);
+            assert.match(options[1].description, /1 pending model/);
+        }
+        return select(title, options);
+    };
+    ui.notify = (message, error) => assert.equal(error, false, message);
+
+    assert.equal(await clearRepositories(repository, ui), "done");
+    assert.deepEqual(await readModels(await discoverRepository(known)), []);
+    for (const target of [unknown, outside]) {
+        assert.deepEqual(await readModels(await discoverRepository(target)), ["provider/model"]);
+    }
 });

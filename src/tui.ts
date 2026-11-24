@@ -1,8 +1,9 @@
 import type { Plugin } from "@opencode/plugin/tui";
 import { actions, runAction, type Action } from "./actions.js";
+import { clearRepositories } from "./clear.js";
 import { OptIn, type Choice } from "./opt-in.js";
 import { discoverRepository } from "./repository.js";
-import { setupRepositories } from "./setup.js";
+import { setupRepositories, type SetupOption } from "./setup.js";
 import type { Repository } from "./repository.js";
 
 export default {
@@ -13,6 +14,7 @@ export default {
         let disposed = false;
         let dialogDirectory: string | undefined;
         let setupRunning = false;
+        let managing = false;
         const directory = () => (ctx.location ?? ctx.data.location.default()).directory;
         const current = (path: string) => !disposed && directory() === path;
         const error = (error: unknown) => {
@@ -32,6 +34,24 @@ export default {
                 dialogDirectory = undefined;
             }
         };
+        const discoveryDialogs = (path: string) => {
+            let lastProgress = 0;
+            return {
+                current: () => current(path),
+                select: (title: string, options: SetupOption[]) => select(path, title, options),
+                close: () => {
+                    if (dialogDirectory === path) ctx.ui.dialog.clear();
+                },
+                progress: (directory: string, found: number) => {
+                    if (!current(path) || Date.now() - lastProgress < 1000) return;
+                    lastProgress = Date.now();
+                    ctx.ui.toast.show({
+                        title: `Trailmate: ${found} repositories found`,
+                        message: directory,
+                    });
+                },
+            };
+        };
         const setup = async (
             path: string,
             repository: Repository,
@@ -39,23 +59,10 @@ export default {
         ): Promise<Choice> => {
             if (setupRunning) return "later";
             setupRunning = true;
-            let lastProgress = 0;
             try {
                 return await setupRepositories(repository, {
+                    ...discoveryDialogs(path),
                     automatic,
-                    current: () => current(path),
-                    select: (title, options) => select(path, title, options),
-                    close: () => {
-                        if (dialogDirectory === path) ctx.ui.dialog.clear();
-                    },
-                    progress: (directory, found) => {
-                        if (!current(path) || Date.now() - lastProgress < 1000) return;
-                        lastProgress = Date.now();
-                        ctx.ui.toast.show({
-                            title: `Trailmate: ${found} repositories found`,
-                            message: directory,
-                        });
-                    },
                     report: async (message) => {
                         if (!current(path)) return;
                         dialogDirectory = path;
@@ -71,33 +78,53 @@ export default {
             }
         };
         const manage = async () => {
-            if (setupRunning) return;
+            if (setupRunning || managing) return;
+            managing = true;
             const path = directory();
             try {
-                const action = await select<Action>(
-                    path,
-                    "Manage Trailmate",
-                    actions.map((value) => ({ title: value, value })),
-                );
-                if (!action || !current(path)) return;
-                const repository = await discoverRepository(path);
-                if (!current(path)) return;
-                if (!repository) throw new Error("Trailmate requires a Git worktree");
-                if (action === "setup") {
-                    await setup(path, repository);
-                    return;
-                }
-                const message = await runAction(repository, action);
-                if (current(path)) {
-                    dialogDirectory = path;
-                    try {
-                        await ctx.ui.dialog.alert({ title: "Trailmate result", message });
-                    } finally {
-                        dialogDirectory = undefined;
-                    }
+                while (current(path)) {
+                    if (!(await manageOnce(path))) return;
                 }
             } catch (cause) {
                 error(cause);
+            } finally {
+                managing = false;
+            }
+        };
+        const manageOnce = async (path: string) => {
+            const action = await select<Action>(
+                path,
+                "Manage Trailmate",
+                actions.map((value) => ({ title: value, value })),
+            );
+            if (!action || !current(path)) return;
+            const repository = await discoverRepository(path);
+            if (!current(path)) return;
+            if (!repository) throw new Error("Trailmate requires a Git worktree");
+            if (action === "setup") {
+                await setup(path, repository);
+                return;
+            }
+            if (action === "clear") {
+                const result = await clearRepositories(repository, {
+                    ...discoveryDialogs(path),
+                    notify: (message, failed) =>
+                        ctx.ui.toast.show({
+                            title: "Trailmate",
+                            message,
+                            variant: failed ? "error" : "success",
+                        }),
+                });
+                return result === "back";
+            }
+            const message = await runAction(repository, action);
+            if (current(path)) {
+                dialogDirectory = path;
+                try {
+                    await ctx.ui.dialog.alert({ title: "Trailmate result", message });
+                } finally {
+                    dialogDirectory = undefined;
+                }
             }
         };
         ctx.keymap.layer(() => ({
@@ -117,11 +144,19 @@ export default {
         const tick = async () => {
             const path = directory();
             if (dialogDirectory && dialogDirectory !== path) ctx.ui.dialog.clear();
-            if (disposed || !path || dialogDirectory || setupRunning || failed.has(path)) return;
+            if (
+                disposed ||
+                !path ||
+                dialogDirectory ||
+                setupRunning ||
+                managing ||
+                failed.has(path)
+            )
+                return;
             try {
                 await optIn.check(
                     path,
-                    () => current(path) && !dialogDirectory,
+                    () => current(path) && !dialogDirectory && !managing,
                     (repository) => setup(path, repository, true),
                 );
             } catch (cause) {

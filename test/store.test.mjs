@@ -231,6 +231,12 @@ test("native management provides attribution actions and a repository-wide auto-
             await writeDecision(selected, true);
             complete({ message: "Setup completed" });
         },
+        async (selected) => {
+            assert.deepEqual(selected, repository);
+            await clearModels(selected);
+            complete({ message: "Clear completed" });
+            return "done";
+        },
         () => false,
     );
     assert.equal(commands[0].slash.name, "trailmate");

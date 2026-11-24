@@ -8,6 +8,7 @@ type Api = Parameters<TuiPlugin>[0];
 export function registerManagement(
     api: Api,
     setup: (repository: Repository) => Promise<unknown>,
+    clear: (repository: Repository) => Promise<"back" | "done" | undefined>,
     busy: () => boolean,
 ): void {
     const report = (result: string) => {
@@ -33,6 +34,16 @@ export function registerManagement(
                 if (action === "setup") {
                     api.ui.dialog.clear();
                     await setup(repository);
+                    return;
+                }
+                if (action === "clear") {
+                    api.ui.dialog.clear();
+                    if (
+                        (await clear(repository)) === "back" &&
+                        api.state.path.directory === directory &&
+                        !api.lifecycle.signal.aborted
+                    )
+                        open();
                     return;
                 }
                 const result = await runAction(repository, action);
