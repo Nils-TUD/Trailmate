@@ -159,6 +159,21 @@ test("V2 child detection catches repeated untracked edits, binary edits, deletio
     assert.deepEqual(await readModels(nested), ["provider/delete", "provider/mode", "provider/new", "provider/update"]);
 });
 
+test("V2 records a tracked directory replaced by a file", async (t) => {
+    const { child, nested, tool } = await fixture(t);
+    const directory = path.join(child, "directory");
+    await mkdir(directory);
+    await writeFile(path.join(directory, "tracked.txt"), "before");
+    await git(child, "add", "directory");
+
+    await tool("replace-directory", async () => {
+        await rm(directory, { recursive: true });
+        await writeFile(directory, "after");
+    });
+
+    assert.deepEqual(await readModels(nested), ["provider/replace-directory"]);
+});
+
 test("V2 records files changed by failed tools and does not count ignored or parent-only edits", async (t) => {
     const { root, child, nested, tool } = await fixture(t);
     await tool("ignored", () => writeFile(path.join(child, "ignored.log"), "cache"));

@@ -4,6 +4,9 @@ Automatic AI attribution for Git commits as a standalone OpenCode extension. The
 is to record models responsible for file-changing steps and add `Assisted-by: provider/model`
 trailers to prepared Git commit messages.
 
+Trailmate assumes one writer per worktree. Attribution is based on changes between snapshots, so
+overlapping tool calls or manual edits during an assistant step can credit the wrong model.
+
 When a repository is opened in the TUI, a native dialog offers:
 
 - **Enable all:** install the Git-hook integration in the current repository and its initialized

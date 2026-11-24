@@ -88,7 +88,9 @@ async function snapshot(repository: Repository, cache: Cache, roots: string[]): 
             files.set(name, digest);
             next.set(name, { signature, digest });
         } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            // A tracked path is also gone if an ancestor directory became a file.
+            const code = (error as NodeJS.ErrnoException).code;
+            if (code !== "ENOENT" && code !== "ENOTDIR") throw error;
         }
     }
     cache.clear();

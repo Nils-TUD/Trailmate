@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, mkdir, readdir, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -244,6 +244,28 @@ test("selective scan can enable children without enabling the parent", async (t)
     assert.equal(await readSetupComplete(repository), true);
     assert.equal(await readDecision(await discoverRepository(child)), "enabled");
     assert.match(reports[0], /Enabled: child/);
+});
+
+test("setup does not recreate Git metadata removed while selecting repositories", async (t) => {
+    const { root, repository } = await fixture(t);
+    const child = path.join(root, "child");
+    await mkdir(child);
+    await git(child, "init", "-q");
+    const reports = [];
+    const ui = setupHost(["scan", child, "apply"], reports);
+    const select = ui.select;
+    const marker = path.join(child, ".git");
+    ui.select = async (title) => {
+        const choice = await select(title);
+        if (choice === "apply") await rename(marker, path.join(child, "saved-git-dir"));
+        return choice;
+    };
+
+    await setupRepositories(repository, ui);
+
+    assert.match(reports[0], /Failed: child: .*no longer available/);
+    await assert.rejects(lstat(marker), { code: "ENOENT" });
+    assert.equal(await readDecision(repository), "enabled");
 });
 
 test("cancelling selective setup does not change existing preferences", async (t) => {

@@ -16,6 +16,7 @@ import {
     type DiscoveryResult,
 } from "./discovery.js";
 import type { Choice } from "./opt-in.js";
+import { discoverRepository, type Repository } from "./repository.js";
 import { markSetupComplete, readDecision, readSetupComplete, writeDecision } from "./settings.js";
 import { addKnownChildren, isRepository, type Workspace } from "./workspace.js";
 
@@ -33,6 +34,14 @@ export interface SetupHost extends DiscoveryHost {
 }
 
 export type DiscoveryDialogs = Pick<SetupHost, "current" | "select" | "close" | "progress">;
+
+async function revalidateRepository(expected: Repository): Promise<Repository> {
+    const actual = await discoverRepository(expected.root);
+    if (actual?.root !== expected.root || actual.commonDir !== expected.commonDir) {
+        throw new Error("Repository is no longer available or its Git directory has changed.");
+    }
+    return actual;
+}
 
 /** Initial management list, or a full scan when given a list to expand. */
 export function discoverForManagement(
@@ -132,7 +141,8 @@ async function setupAttempt(repository: Workspace, host: SetupHost): Promise<Cho
     };
     if (!(await canApply())) return "configured";
     if (choice === "disable" && worktree) {
-        await writeDecision(worktree, false);
+        const actual = await revalidateRepository(worktree);
+        if (host.current()) await writeDecision(actual, false);
         return "configured";
     }
 
@@ -237,17 +247,18 @@ async function setupAttempt(repository: Workspace, host: SetupHost): Promise<Cho
             continue;
         }
         try {
+            const actual = await revalidateRepository(child);
             // A child opt-out made during discovery must also be respected by Enable all.
             if (
                 choice === "enable" &&
                 child.root !== repository.root &&
-                (await readDecision(child)) === "disabled"
+                (await readDecision(actual)) === "disabled"
             ) {
                 results.push(`Unchanged: ${label} (explicitly disabled)`);
                 continue;
             }
             if (!host.current()) return "configured";
-            await writeDecision(child, true);
+            await writeDecision(actual, true);
             results.push(`Enabled: ${label}`);
         } catch (error) {
             results.push(`Failed: ${label}: ${String(error)}`);
@@ -256,10 +267,17 @@ async function setupAttempt(repository: Workspace, host: SetupHost): Promise<Cho
     // Remember setup even if the user chose children without enabling the parent.
     // This is not a parent opt-out and does not change its attribution preference.
     if (host.current() && worktree) {
-        await markSetupComplete(
-            worktree,
-            candidates.map((child) => child.repository.root),
-        );
+        try {
+            const actual = await revalidateRepository(worktree);
+            if (host.current()) {
+                await markSetupComplete(
+                    actual,
+                    candidates.map((child) => child.repository.root),
+                );
+            }
+        } catch (error) {
+            results.push(`Failed to save setup for the current worktree: ${String(error)}`);
+        }
     }
     if (host.current()) {
         await host.report(
