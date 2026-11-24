@@ -1,13 +1,12 @@
 import type { Plugin } from "@opencode/plugin";
 import { createCollector } from "./collection.js";
-import { discoverRepository } from "./repository.js";
+import { discoverWorkspace } from "./workspace.js";
 import { createChildChanges } from "./child-changes.js";
 
 export default {
     id: "trailmate",
     async setup(ctx) {
-        const repository = await discoverRepository(ctx.location.directory);
-        if (!repository) return;
+        const repository = await discoverWorkspace(ctx.location.directory);
 
         const collector = createCollector(repository, {
             message: async (sessionID, messageID) => {

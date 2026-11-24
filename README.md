@@ -17,8 +17,12 @@ When a repository is opened in the TUI, a native dialog offers:
 
 In addition, the plugin provides a TUI for status inspection and state management. Use `/trailmate`
 or the **Manage Trailmate** command-palette entry to open a native menu with the commands `status`,
-`setup`, `list`, `clear`, and `toggle-auto-clear`. Choose `setup` to reopen the initial setup dialog
-again.
+`setup`, `list`, `clear`, and `toggle-auto-clear`. Choose `setup` to reopen the initial setup dialog.
+
+If OpenCode opens in a directory outside Git, use `/trailmate` → `setup` to scan for Git
+repositories below it and choose which ones to enable. There is no startup scan or opt-in prompt,
+and no global discovery inventory. `status` and `clear` scan when opened; `list` and
+`toggle-auto-clear` scan and let you pick a child.
 
 Trailmate automatically clears the committing worktree's model list after each successful
 commit by default. Choose **toggle-auto-clear** to turn this off or back on. The setting applies repository-wide,
@@ -108,7 +112,7 @@ npm test
 
 ## Internals
 
-All plugin state is stored in one repository-wide JSON file outside the worktree:
+Each Git repository's preferences and attribution are stored in a JSON file outside the worktree:
 
 ```text
 <git-common-dir>/trailmate/settings.json

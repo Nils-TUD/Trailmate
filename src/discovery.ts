@@ -150,7 +150,7 @@ export async function discoverSubmodules(
 }
 
 export async function scanRepositories(
-    repository: Repository,
+    scope: { root: string },
     initial: DiscoveryResult,
     host: DiscoveryHost,
 ): Promise<DiscoveryResult> {
@@ -159,7 +159,7 @@ export async function scanRepositories(
         skipped: [...initial.skipped],
     };
     const seen = new Set(result.candidates.map(({ repository }) => repository.root));
-    const pending = [repository.root];
+    const pending = [scope.root];
     // Serial traversal bounds filesystem/Git activity even in very large trees.
     while (pending.length && host.current()) {
         const directory = pending.pop()!;
@@ -167,7 +167,7 @@ export async function scanRepositories(
         try {
             const entries = await readdir(directory, { withFileTypes: true });
             if (entries.some((entry) => entry.name === ".git") && !seen.has(directory)) {
-                const child = await candidate(repository.root, directory);
+                const child = await candidate(scope.root, directory);
                 if (child && !seen.has(child.root)) {
                     seen.add(child.root);
                     result.candidates.push({ repository: child, kind: "nested repository" });

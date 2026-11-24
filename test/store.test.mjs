@@ -238,6 +238,22 @@ test("native management provides attribution actions and a repository-wide auto-
             return "done";
         },
         () => false,
+        () => {
+            let finishDiscovery;
+            return {
+                current: () => true,
+                progress: () => {},
+                close: () => finishDiscovery?.(),
+                select: async (title, options) => {
+                    if (title === "Discovering Git repositories…") {
+                        return new Promise((resolve) => { finishDiscovery = resolve; });
+                    }
+                    assert.equal(options[0].value, root);
+                    if (title === "Toggle auto-clear") assert.match(options[0].description, /enabled → disable/);
+                    return root;
+                },
+            };
+        },
     );
     assert.equal(commands[0].slash.name, "trailmate");
     const actions = ["status", "setup", "list", "clear", "toggle-auto-clear"];

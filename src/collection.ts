@@ -2,6 +2,7 @@ import { discoverRepository, type Repository } from "./repository.js";
 import { addModel, readDecision } from "./settings.js";
 import path from "node:path";
 import { contains } from "./discovery.js";
+import { isRepository, type Workspace } from "./workspace.js";
 
 // Only the attribution data is shared; each host adapts its own SDK at the edge.
 export type AttributionMessage = { id: string; sessionID: string } & (
@@ -45,7 +46,7 @@ interface Entry {
     files: Set<string>;
 }
 
-export function createCollector(repository: Repository, host: Host) {
+export function createCollector(repository: Workspace, host: Host) {
     const entries = new Map<string, Entry>();
     let queue = Promise.resolve();
     const warn = host.warn;
@@ -126,6 +127,9 @@ export function createCollector(repository: Repository, host: Host) {
                 const info = event.type === "message.updated" ? event.properties.info : undefined;
                 const part =
                     event.type === "message.part.updated" ? event.properties.part : undefined;
+                // Containers have no parent snapshot; only the child tool hooks
+                // collect attribution there.
+                if (part && !isRepository(repository)) return;
                 if (part && (part.type !== "patch" || !part.files.length)) return;
 
                 const sessionID = info?.sessionID ?? part!.sessionID;

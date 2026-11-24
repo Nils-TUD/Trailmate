@@ -1,50 +1,21 @@
 /** Shared clear submenu for both TUIs. Only pending worktree attribution is changed. */
 import path from "node:path";
-import { contains, discoverSubmodules, scanRepositories, type DiscoveryResult } from "./discovery.js";
+import type { DiscoveryResult } from "./discovery.js";
 import { discoverRepository, type Repository } from "./repository.js";
-import { clearModels, readChildren, readModels } from "./settings.js";
-import type { SetupHost, SetupOption } from "./setup.js";
+import { clearModels, readModels } from "./settings.js";
+import { discoverForManagement, type DiscoveryDialogs, type SetupOption } from "./setup.js";
+import { isRepository, type Workspace } from "./workspace.js";
 
-type ClearHost = Pick<SetupHost, "current" | "select" | "close" | "progress"> & {
+type ClearHost = DiscoveryDialogs & {
     notify(message: string, error?: boolean): void;
 };
 
 export async function clearRepositories(
-    repository: Repository,
+    repository: Workspace,
     host: ClearHost,
 ): Promise<"back" | "done"> {
-    const discover = async (initial?: DiscoveryResult) => {
-        let finished = false;
-        let canceled = false;
-        const dialog = host
-            .select("Discovering Git repositories…", [
-                {
-                    title: "Cancel",
-                    value: "cancel",
-                    description: "No attribution will be cleared.",
-                },
-            ])
-            .then(() => {
-                if (!finished) canceled = true;
-            });
-        const progress = { current: () => host.current() && !canceled, progress: host.progress };
-        let result;
-        try {
-            if (initial) {
-                result = await scanRepositories(repository, initial, progress);
-            } else {
-                result = await discoverSubmodules(repository, progress);
-                if (progress.current()) {
-                    await addKnownChildren(repository, result, progress.current);
-                }
-            }
-        } finally {
-            finished = true;
-            host.close();
-            await dialog;
-        }
-        return progress.current() ? result : undefined;
-    };
+    const discover = (initial?: DiscoveryResult) =>
+        discoverForManagement(repository, host, "No attribution will be cleared.", initial);
 
     const label = (target: Repository) => path.relative(repository.root, target.root) || ".";
     const clear = async (target: Repository) => {
@@ -60,7 +31,7 @@ export async function clearRepositories(
     let result = initial;
     while (host.current()) {
         const rows: SetupOption[] = [];
-        for (const { repository: target, kind } of result.candidates) {
+        for (const { repository: target } of result.candidates) {
             if (!host.current()) return "done";
             let detail: string;
             try {
@@ -72,24 +43,31 @@ export async function clearRepositories(
             rows.push({
                 title: label(target),
                 value: target.root,
-                description: `${kind}; ${detail}`,
+                description: detail,
             });
         }
         if (!host.current()) return "done";
-        const action = await host.select("Clear pending attribution", [
-            ...rows,
-            {
-                title: "Clear all listed repositories…",
-                value: "all",
-                description: `${rows.length} listed worktrees; does not scan for more repositories.`,
-            },
-            { title: "Scan for additional child repositories…", value: "scan" },
-            { title: "Cancel", value: "cancel" },
-        ]);
+        const action = await host.select(
+            rows.length ? "Clear pending attribution" : "No known repositories to clear",
+            [
+                ...rows,
+                ...(rows.length
+                    ? [
+                          {
+                              title: "Clear all listed repositories…",
+                              value: "all",
+                              description: `${rows.length} listed worktrees; does not scan for more repositories.`,
+                          },
+                      ]
+                    : []),
+                { title: "Scan for additional child repositories…", value: "scan" },
+                { title: "Cancel", value: "cancel" },
+            ],
+        );
         if (!host.current()) return "done";
         if (!action || action === "cancel") return "back";
         if (action === "scan") {
-            result = (await discover(initial)) ?? result;
+            result = (await discover(isRepository(repository) ? initial : undefined)) ?? result;
             continue;
         }
         if (action === "all") {
@@ -100,8 +78,7 @@ export async function clearRepositories(
                     {
                         title: "Clear all",
                         value: "confirm",
-                        description:
-                            "Current worktree and all child worktrees shown in the clear menu.",
+                        description: "Only worktrees shown in the clear menu.",
                     },
                 ],
             );
@@ -137,26 +114,4 @@ export async function clearRepositories(
         }
     }
     return "done";
-}
-
-// Reuse the last applied setup's paths without doing a filesystem scan or
-// changing the saved inventory. Prefer the classification from fresh discovery.
-async function addKnownChildren(
-    repository: Repository,
-    result: DiscoveryResult,
-    current: () => boolean,
-): Promise<void> {
-    const seen = new Set(result.candidates.map(({ repository }) => repository.root));
-    for (const root of new Set(await readChildren(repository))) {
-        if (!current()) return;
-        if (seen.has(root) || !contains(repository.root, root)) continue;
-        try {
-            const child = await discoverRepository(root);
-            if (child?.root === root) {
-                result.candidates.push({ repository: child, kind: "nested repository" });
-            }
-        } catch {
-            // An unavailable cached path is not a clear target.
-        }
-    }
 }

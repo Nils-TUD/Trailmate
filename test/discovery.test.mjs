@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,11 +9,113 @@ import { discoverRepository } from "../dist/repository.js";
 import { discoverSubmodules, scanRepositories } from "../dist/discovery.js";
 import { setupRepositories } from "../dist/setup.js";
 import { clearRepositories } from "../dist/clear.js";
-import { addModel, markSetupComplete, readDecision, readModels, readSetupComplete, writeDecision } from "../dist/settings.js";
+import { runWorkspaceAction } from "../dist/actions.js";
+import { discoverWorkspace } from "../dist/workspace.js";
+import { addModel, markSetupComplete, readClearAfterCommit, readDecision, readModels, readSetupComplete, toggleClearAfterCommit, writeDecision } from "../dist/settings.js";
 
 const execute = promisify(execFile);
 const git = (cwd, ...args) => execute("git", ["-C", cwd, ...args]);
 const host = { current: () => true, progress: () => { } };
+
+test("non-Git actions rescan without saving a global inventory", async (t) => {
+    const directory = await mkdtemp(path.join(tmpdir(), "trailmate-container-"));
+    const previous = process.env.XDG_STATE_HOME;
+    process.env.XDG_STATE_HOME = path.join(directory, "state");
+    t.after(async () => {
+        if (previous === undefined) delete process.env.XDG_STATE_HOME;
+        else process.env.XDG_STATE_HOME = previous;
+        await rm(directory, { recursive: true, force: true });
+    });
+    const root = path.join(directory, "container");
+    const child = path.join(root, "child");
+    await mkdir(child, { recursive: true });
+    await git(child, "init", "-q");
+    const workspace = await discoverWorkspace(root);
+    const target = await discoverRepository(child);
+    assert.equal(workspace.commonDir, undefined);
+    const reports = [];
+    const setup = setupHost(["scan", child, "apply"], reports);
+    const select = setup.select;
+    setup.select = (title, options) => {
+        if (title.startsWith("Enable Trailmate?")) {
+            assert.deepEqual(options.map(({ value }) => value), ["scan", "later"]);
+        } else if (title.startsWith("Select repositories")) {
+            assert.ok(!options.some(({ value }) => value === root));
+        }
+        return select(title, options);
+    };
+    assert.equal(await setupRepositories(workspace, setup), "configured");
+    assert.equal(await discoverRepository(root), undefined);
+    assert.equal(await readDecision(target), "enabled");
+    assert.match(reports[0], /Enabled: child/);
+
+    await addModel(target, "provider/model");
+    const another = path.join(root, "another");
+    await mkdir(another);
+    await git(another, "init", "-q");
+    const status = await runWorkspaceAction(workspace, "status", setupHost([], []));
+    assert.match(status, /child: enabled; hook: installed; 1 pending model/);
+    assert.match(status, /another: unknown/);
+    const picker = setupHost([child, child], []);
+    const pick = picker.select;
+    picker.select = (title, options) => {
+        if (title !== "Discovering Git repositories…") {
+            assert.ok(options.some(({ value }) => value === another));
+            assert.ok(!options.some(({ value }) => value === "scan"));
+        }
+        return pick(title, options);
+    };
+    assert.equal(await runWorkspaceAction(workspace, "list", picker), "provider/model");
+    assert.match(await runWorkspaceAction(workspace, "toggle-auto-clear", picker), /disabled/);
+    const clear = setupHost(["all", "confirm"], []);
+    clear.notify = (message, failed) => assert.ok(!failed, message);
+    assert.equal(await clearRepositories(workspace, clear), "done");
+    assert.deepEqual(await readModels(target), []);
+    assert.deepEqual(await readdir(directory), ["container"]);
+});
+
+test("Git worktree list and toggle pick from submodules, known children, and optional scan results", async (t) => {
+    const { root, repository } = await fixture(t);
+    const module = path.join(root, "module");
+    const known = path.join(root, "known");
+    const unknown = path.join(root, "unknown");
+    for (const child of [module, known, unknown]) {
+        await mkdir(child);
+        await git(child, "init", "-q");
+    }
+    await git(module, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture");
+    await git(root, "add", "module");
+    await markSetupComplete(repository, [known]);
+    const target = await discoverRepository(unknown);
+    await writeDecision(target, true);
+    await addModel(target, "provider/model");
+    await toggleClearAfterCommit(target);
+
+    const list = setupHost(["scan", unknown], []);
+    const select = list.select;
+    const menus = [];
+    list.select = (title, options) => {
+        if (title === "List pending models") menus.push(options.map(({ value }) => value));
+        return select(title, options);
+    };
+    assert.equal(await runWorkspaceAction(repository, "list", list), "provider/model");
+    assert.deepEqual(menus[0], [root, module, known, "scan", "cancel"]);
+    assert.ok(menus[1].includes(unknown));
+
+    const toggle = setupHost(["scan", unknown], []);
+    const selectToggle = toggle.select;
+    toggle.select = (title, options) => {
+        if (title === "Toggle auto-clear") {
+            assert.match(options.find(({ value }) => value === root).description, /enabled → disable/);
+            const child = options.find(({ value }) => value === unknown);
+            if (child) assert.match(child.description, /disabled → enable/);
+        }
+        return selectToggle(title, options);
+    };
+    assert.match(await runWorkspaceAction(repository, "toggle-auto-clear", toggle), /enabled/);
+    assert.equal(await readClearAfterCommit(target), true);
+    assert.equal(await readClearAfterCommit(repository), true);
+});
 
 async function fixture(t) {
     const directory = await mkdtemp(path.join(tmpdir(), "trailmate-discovery-"));

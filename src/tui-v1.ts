@@ -1,6 +1,6 @@
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
 import { OptIn, type Choice } from "./opt-in.js";
-import type { Repository } from "./repository.js";
+import type { Workspace } from "./workspace.js";
 import { registerManagement } from "./management-v1.js";
 import { setupRepositories, type SetupOption } from "./setup.js";
 import { clearRepositories } from "./clear.js";
@@ -82,7 +82,7 @@ const tui: TuiPlugin = async (api) => {
 
     const prompt = async (
         directory: string,
-        repository: Repository,
+        repository: Workspace,
         automatic = false,
     ): Promise<Choice> => {
         const dialogs = discoveryDialogs(directory);
@@ -139,6 +139,14 @@ const tui: TuiPlugin = async (api) => {
             );
         },
         () => setupDirectory !== undefined,
+        (directory) => {
+            const dialogs = discoveryDialogs(directory);
+            return {
+                ...dialogs,
+                select: (title, options) =>
+                    withDialogs(directory, () => dialogs.select(title, options)),
+            };
+        },
     );
 
     const tick = async () => {

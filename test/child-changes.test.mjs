@@ -14,13 +14,13 @@ const execute = promisify(execFile);
 const git = (root, ...args) => execute("git", ["-C", root, ...args]);
 const commit = (root) => git(root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
 
-async function fixture(t, submodule = false, version = 2) {
+async function fixture(t, submodule = false, version = 2, container = false) {
     const directory = await mkdtemp(path.join(tmpdir(), "trailmate-child-changes-"));
     t.after(() => rm(directory, { recursive: true, force: true }));
     const root = path.join(directory, "parent");
     const source = submodule ? path.join(directory, "source") : path.join(root, "child");
     await mkdir(root);
-    await git(root, "init", "-q");
+    if (!container) await git(root, "init", "-q");
     await mkdir(source);
     await git(source, "init", "-q");
     await writeFile(path.join(source, "tracked.txt"), "original\n");
@@ -31,9 +31,9 @@ async function fixture(t, submodule = false, version = 2) {
     const child = path.join(root, "child");
     const repository = await discoverRepository(root);
     const nested = await discoverRepository(child);
-    await writeDecision(repository, false);
-    await writeDecision(nested, true);
-    await markSetupComplete(repository, [child]);
+    if (repository) await writeDecision(repository, false);
+    if (!container) await writeDecision(nested, true);
+    if (repository) await markSetupComplete(repository, [child]);
     const hooks = new Map();
     const messages = new Map();
     const warnings = [];
@@ -103,6 +103,18 @@ async function fixture(t, submodule = false, version = 2) {
         await hooks.get("execute.after")({ ...call, status: "completed", result: { content: [] } });
     };
     return { root, child, repository, nested, tool };
+}
+
+for (const version of [1, 2]) {
+    test(`V${version} picks up configured children after starting outside Git`, async (t) => {
+        const { child, nested, tool } = await fixture(t, false, version, true);
+        const file = path.join(child, "tracked.txt");
+        await tool("before-setup", () => writeFile(file, "not configured yet"));
+        assert.deepEqual(await readModels(nested), []);
+        await writeDecision(nested, true);
+        await tool("after-setup", () => writeFile(file, "now configured"));
+        assert.deepEqual(await readModels(nested), [`${version === 1 ? "v1" : "provider"}/after-setup`]);
+    });
 }
 
 for (const submodule of [false, true]) {

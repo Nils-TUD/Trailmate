@@ -1,10 +1,9 @@
 import type { Plugin } from "@opencode/plugin/tui";
-import { actions, runAction, type Action } from "./actions.js";
+import { actions, runWorkspaceAction, type Action } from "./actions.js";
 import { clearRepositories } from "./clear.js";
 import { OptIn, type Choice } from "./opt-in.js";
-import { discoverRepository } from "./repository.js";
+import { discoverWorkspace, type Workspace } from "./workspace.js";
 import { setupRepositories, type SetupOption } from "./setup.js";
-import type { Repository } from "./repository.js";
 
 export default {
     id: "trailmate",
@@ -54,7 +53,7 @@ export default {
         };
         const setup = async (
             path: string,
-            repository: Repository,
+            repository: Workspace,
             automatic = false,
         ): Promise<Choice> => {
             if (setupRunning) return "later";
@@ -98,9 +97,8 @@ export default {
                 actions.map((value) => ({ title: value, value })),
             );
             if (!action || !current(path)) return;
-            const repository = await discoverRepository(path);
+            const repository = await discoverWorkspace(path);
             if (!current(path)) return;
-            if (!repository) throw new Error("Trailmate requires a Git worktree");
             if (action === "setup") {
                 await setup(path, repository);
                 return;
@@ -117,8 +115,8 @@ export default {
                 });
                 return result === "back";
             }
-            const message = await runAction(repository, action);
-            if (current(path)) {
+            const message = await runWorkspaceAction(repository, action, discoveryDialogs(path));
+            if (message !== undefined && current(path)) {
                 dialogDirectory = path;
                 try {
                     await ctx.ui.dialog.alert({ title: "Trailmate result", message });

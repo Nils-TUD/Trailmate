@@ -9,10 +9,15 @@
  * detection. Canceling discovery or selection returns to setup without writes.
  */
 import path from "node:path";
-import { discoverSubmodules, scanRepositories, type DiscoveryHost } from "./discovery.js";
+import {
+    discoverSubmodules,
+    scanRepositories,
+    type DiscoveryHost,
+    type DiscoveryResult,
+} from "./discovery.js";
 import type { Choice } from "./opt-in.js";
-import type { Repository } from "./repository.js";
 import { markSetupComplete, readDecision, readSetupComplete, writeDecision } from "./settings.js";
+import { addKnownChildren, isRepository, type Workspace } from "./workspace.js";
 
 export interface SetupOption {
     title: string;
@@ -27,9 +32,57 @@ export interface SetupHost extends DiscoveryHost {
     report(message: string): Promise<void>;
 }
 
+export type DiscoveryDialogs = Pick<SetupHost, "current" | "select" | "close" | "progress">;
+
+/** Initial management list, or a full scan when given a list to expand. */
+export function discoverForManagement(
+    workspace: Workspace,
+    host: DiscoveryDialogs,
+    description: string,
+    initial?: DiscoveryResult,
+): Promise<DiscoveryResult | undefined> {
+    return withDiscoveryDialog(host, description, async (progress) => {
+        if (initial || !isRepository(workspace)) {
+            return scanRepositories(
+                workspace,
+                initial ?? { candidates: [], skipped: [] },
+                progress,
+            );
+        }
+        const result = await discoverSubmodules(workspace, progress);
+        if (progress.current()) await addKnownChildren(workspace, result, progress.current);
+        return result;
+    });
+}
+
+export async function withDiscoveryDialog<T>(
+    host: DiscoveryDialogs,
+    description: string,
+    run: (progress: DiscoveryHost) => Promise<T>,
+): Promise<T | undefined> {
+    let finished = false;
+    let canceled = false;
+    const dialog = host
+        .select("Discovering Git repositories…", [
+            { title: "Cancel", value: "cancel", description },
+        ])
+        .then(() => {
+            if (!finished) canceled = true;
+        });
+    const progress = { current: () => host.current() && !canceled, progress: host.progress };
+    try {
+        const result = await run(progress);
+        return progress.current() ? result : undefined;
+    } finally {
+        finished = true;
+        host.close();
+        await dialog;
+    }
+}
+
 // Both OpenCode adapters supply only native single-choice dialogs. No custom UI runtime is needed:
 // selecting a row toggles it and opens the list again to simulate a multiple-choice dialog.
-export async function setupRepositories(repository: Repository, host: SetupHost): Promise<Choice> {
+export async function setupRepositories(repository: Workspace, host: SetupHost): Promise<Choice> {
     while (host.current()) {
         const result = await setupAttempt(repository, host);
         if (result !== "back") return result;
@@ -37,23 +90,29 @@ export async function setupRepositories(repository: Repository, host: SetupHost)
     return "later";
 }
 
-async function setupAttempt(repository: Repository, host: SetupHost): Promise<Choice | "back"> {
+async function setupAttempt(repository: Workspace, host: SetupHost): Promise<Choice | "back"> {
+    const worktree = isRepository(repository) ? repository : undefined;
     const choice = await host.select(`Enable Trailmate? ${repository.root}`, [
-        {
-            title: "Enable all",
-            value: "enable",
-            description: "Current repository and initialized submodules; preserve child opt-outs.",
-        },
-        {
-            title: "Enable selectively…",
-            value: "select",
-            description: "Choose from the current repository and initialized submodules.",
-        },
-        {
-            title: "Disable",
-            value: "disable",
-            description: "Disable this repository; leave child preferences unchanged.",
-        },
+        ...(worktree
+            ? [
+                  {
+                      title: "Enable all",
+                      value: "enable",
+                      description:
+                          "Current repository and initialized submodules; preserve child opt-outs.",
+                  },
+                  {
+                      title: "Enable selectively…",
+                      value: "select",
+                      description: "Choose from the current repository and initialized submodules.",
+                  },
+                  {
+                      title: "Disable",
+                      value: "disable",
+                      description: "Disable this repository; leave child preferences unchanged.",
+                  },
+              ]
+            : []),
         {
             title: "Scan for additional child repositories…",
             value: "scan",
@@ -65,14 +124,15 @@ async function setupAttempt(repository: Repository, host: SetupHost): Promise<Ch
     const canApply = async () => {
         if (
             host.automatic &&
-            ((await readDecision(repository)) !== "unknown" ||
-                (await readSetupComplete(repository)))
-        ) return false;
+            worktree &&
+            ((await readDecision(worktree)) !== "unknown" || (await readSetupComplete(worktree)))
+        )
+            return false;
         return host.current();
     };
     if (!(await canApply())) return "configured";
-    if (choice === "disable") {
-        await writeDecision(repository, false);
+    if (choice === "disable" && worktree) {
+        await writeDecision(worktree, false);
         return "configured";
     }
 
@@ -100,7 +160,9 @@ async function setupAttempt(repository: Repository, host: SetupHost): Promise<Ch
     };
     let discovery;
     try {
-        discovery = await discoverSubmodules(repository, discoveryHost);
+        discovery = worktree
+            ? await discoverSubmodules(worktree, discoveryHost)
+            : { candidates: [], skipped: [] };
         if (choice === "scan" && discoveryHost.current()) {
             discovery = await scanRepositories(repository, discovery, discoveryHost);
         }
@@ -112,6 +174,10 @@ async function setupAttempt(repository: Repository, host: SetupHost): Promise<Ch
     if (!host.current()) return "later";
     if (controller.signal.aborted) return "back";
     const candidates = discovery.candidates;
+    if (!worktree && !candidates.length) {
+        await host.report(["No child Git repositories found.", ...discovery.skipped].join("\n"));
+        return "back";
+    }
     const selected = new Set<string>();
     const decisions = new Map<string, Awaited<ReturnType<typeof readDecision>>>();
     for (const { repository: child, kind } of candidates) {
@@ -140,11 +206,15 @@ async function setupAttempt(repository: Repository, host: SetupHost): Promise<Ch
                 {
                     title: "Apply",
                     value: "apply",
-                    description: "Enable selected repositories; leave unchecked repositories unchanged.",
+                    description:
+                        "Enable selected repositories; leave unchecked repositories unchanged.",
                 },
                 { title: "Cancel", value: "cancel" },
             );
-            const action = await host.select(`Select repositories — ${selected.size} selected`, options);
+            const action = await host.select(
+                `Select repositories — ${selected.size} selected`,
+                options,
+            );
             if (!host.current()) return "later";
             if (!action || action === "cancel") return "back";
             if (action === "apply") break;
@@ -185,13 +255,16 @@ async function setupAttempt(repository: Repository, host: SetupHost): Promise<Ch
     }
     // Remember setup even if the user chose children without enabling the parent.
     // This is not a parent opt-out and does not change its attribution preference.
-    if (host.current()) {
-        await markSetupComplete(repository, candidates.map((child) => child.repository.root));
+    if (host.current() && worktree) {
+        await markSetupComplete(
+            worktree,
+            candidates.map((child) => child.repository.root),
+        );
     }
     if (host.current()) {
         await host.report(
             [...results, ...discovery.skipped.map((item) => `Skipped: ${item}`)].join("\n") ||
-            "No repositories selected.",
+                "No repositories selected.",
         );
     }
     return "configured";

@@ -1,12 +1,10 @@
 import type { Plugin, PluginModule } from "@opencode-ai/plugin";
-import { discoverRepository } from "./repository.js";
+import { discoverWorkspace, isRepository } from "./workspace.js";
 import { createCollector } from "./collection.js";
 import { createChildChanges } from "./child-changes.js";
 
 const server: Plugin = async ({ client, directory }) => {
-    const repository = await discoverRepository(directory);
-
-    if (!repository) return {};
+    const repository = await discoverWorkspace(directory);
     const warn = async (error: unknown) => {
         await client.app.log({
             body: { service: "trailmate", level: "warn", message: String(error) },
@@ -34,7 +32,7 @@ const server: Plugin = async ({ client, directory }) => {
 
     return {
         config: async (config) => {
-            if (config.snapshot === false) {
+            if (config.snapshot === false && isRepository(repository)) {
                 await client.app.log({
                     body: {
                         service: "trailmate",

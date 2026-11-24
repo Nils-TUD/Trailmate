@@ -12,13 +12,14 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, readlink } from "node:fs/promises";
+import { lstat, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { AttributionMessage } from "./collection.js";
-import { contains } from "./discovery.js";
+import { contains, scanRepositories } from "./discovery.js";
 import { discoverRepository, type Repository } from "./repository.js";
 import { addModel, readChildren, readDecision } from "./settings.js";
+import { isRepository, type Workspace } from "./workspace.js";
 
 const execute = promisify(execFile);
 
@@ -53,17 +54,26 @@ async function snapshot(repository: Repository, cache: Cache, roots: string[]): 
         const file = path.resolve(repository.root, name);
         if (!contains(repository.root, file)) continue;
         if (
-            roots.some((root) =>
-                root !== repository.root && contains(repository.root, root) && contains(root, file)
+            roots.some(
+                (root) =>
+                    root !== repository.root &&
+                    contains(repository.root, root) &&
+                    contains(root, file),
             )
-        ) continue;
+        )
+            continue;
         try {
             const stat = await lstat(file, { bigint: true });
             // Gitlinks and embedded repository directories belong to a separate
             // sample. Do not follow symlinks or walk ignored/cache directories.
             if (!stat.isFile() && !stat.isSymbolicLink()) continue;
             const signature = [
-                stat.dev, stat.ino, stat.size, stat.mode, stat.mtimeNs, stat.ctimeNs,
+                stat.dev,
+                stat.ino,
+                stat.size,
+                stat.mode,
+                stat.mtimeNs,
+                stat.ctimeNs,
             ].join(":");
             const cached = cache.get(name);
             let digest = cached?.signature === signature ? cached.digest : undefined;
@@ -87,11 +97,13 @@ async function snapshot(repository: Repository, cache: Cache, roots: string[]): 
 }
 
 function changed(before: Files, after: Files): boolean {
-    return before.size !== after.size ||
-        [...before].some(([name, digest]) => after.get(name) !== digest);
+    return (
+        before.size !== after.size ||
+        [...before].some(([name, digest]) => after.get(name) !== digest)
+    );
 }
 
-export function createChildChanges(repository: Repository, host: Host) {
+export function createChildChanges(repository: Workspace, host: Host) {
     const caches = new Map<string, Cache>();
     const pending = new Map<string, { model: string; roots: string[]; samples: Sample[] }>();
     const key = (call: ToolCall) => `${call.sessionID}/${call.id}`;
@@ -102,16 +114,32 @@ export function createChildChanges(repository: Repository, host: Host) {
             message: () => Promise<AttributionMessage | undefined>,
         ): Promise<void> {
             try {
-                const hints = [...new Set(await readChildren(repository))].filter(
-                    (root) => root !== repository.root && contains(repository.root, root),
-                );
-                if (!hints.length) return;
+                const hints = isRepository(repository)
+                    ? [...new Set(await readChildren(repository))].filter(
+                          (root) => root !== repository.root && contains(repository.root, root),
+                      )
+                    : undefined;
+                if (hints?.length === 0) return;
                 const info = await message();
                 if (info?.role !== "assistant" || info.summary) return;
-                const source = await discoverRepository(info.path.cwd);
-                if (!source || !contains(repository.root, source.root)) return;
+                const sourceRoot = isRepository(repository)
+                    ? (await discoverRepository(info.path.cwd))?.root
+                    : await realpath(info.path.cwd);
+                if (!sourceRoot || !contains(repository.root, sourceRoot)) return;
                 const children = new Map<string, Repository>();
-                for (const root of hints) {
+                if (!hints) {
+                    const discovery = await scanRepositories(
+                        repository,
+                        { candidates: [], skipped: [] },
+                        {
+                            current: () => true,
+                            progress: () => {},
+                        },
+                    );
+                    for (const { repository: child } of discovery.candidates)
+                        children.set(child.root, child);
+                }
+                for (const root of hints ?? []) {
                     try {
                         const child = await discoverRepository(root);
                         if (child?.root === root) children.set(root, child);
@@ -126,13 +154,20 @@ export function createChildChanges(repository: Repository, host: Host) {
                         if ((await readDecision(child)) !== "enabled") continue;
                         const cache = caches.get(root) ?? new Map();
                         caches.set(root, cache);
-                        samples.push({ repository: child, files: await snapshot(child, cache, roots) });
+                        samples.push({
+                            repository: child,
+                            files: await snapshot(child, cache, roots),
+                        });
                     } catch (error) {
                         await host.warn(error);
                     }
                 }
                 if (samples.length) {
-                    pending.set(key(call), { model: `${info.providerID}/${info.modelID}`, roots, samples });
+                    pending.set(key(call), {
+                        model: `${info.providerID}/${info.modelID}`,
+                        roots,
+                        samples,
+                    });
                     if (pending.size > 1024) {
                         pending.delete(pending.keys().next().value!);
                         await host.warn("Child attribution evicted an unfinished tool call");
@@ -153,9 +188,14 @@ export function createChildChanges(repository: Repository, host: Host) {
                     if (
                         child?.commonDir !== sample.repository.commonDir ||
                         child.root !== sample.repository.root
-                    ) continue;
+                    )
+                        continue;
                     if ((await readDecision(child)) !== "enabled") continue;
-                    const files = await snapshot(child, caches.get(child.root) ?? new Map(), entry.roots);
+                    const files = await snapshot(
+                        child,
+                        caches.get(child.root) ?? new Map(),
+                        entry.roots,
+                    );
                     if (changed(sample.files, files)) await addModel(child, entry.model);
                 } catch (error) {
                     await host.warn(error);
