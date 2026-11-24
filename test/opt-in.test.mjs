@@ -191,7 +191,7 @@ test("server loads and flushes without enabling headless repositories", async (t
     });
 
     assert.deepEqual(messages, ["Trailmate plugin loaded"]);
-    await hooks["tool.execute.before"]();
+    await hooks["tool.execute.before"]({ sessionID: "session", callID: "next", tool: "read" }, { args: {} });
     assert.equal(await readDecision(repository), "unknown");
 });
 

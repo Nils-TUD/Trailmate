@@ -1,10 +1,17 @@
 import type { TuiPlugin } from "@opencode-ai/plugin/tui";
-import { discoverRepository } from "./repository.js";
-import { actions, runAction, type Action } from "./actions.js";
+import { discoverWorkspace, type Workspace } from "./workspace.js";
+import { actions, runWorkspaceAction, type Action } from "./actions.js";
+import type { DiscoveryDialogs } from "./setup.js";
 
 type Api = Parameters<TuiPlugin>[0];
 
-export function registerManagement(api: Api): void {
+export function registerManagement(
+    api: Api,
+    setup: (repository: Workspace) => Promise<unknown>,
+    clear: (repository: Workspace) => Promise<"back" | "done" | undefined>,
+    busy: () => boolean,
+    dialogs: (directory: string) => DiscoveryDialogs,
+): void {
     const report = (result: string) => {
         api.ui.dialog.replace(() =>
             api.ui.DialogAlert({
@@ -16,16 +23,34 @@ export function registerManagement(api: Api): void {
     };
 
     const open = () => {
+        if (busy()) return;
         const directory = api.state.path.directory;
         const run = async (action: Action) => {
             try {
-                const repository = await discoverRepository(directory);
-                if (!repository) throw new Error("Trailmate requires a Git worktree");
+                const repository = await discoverWorkspace(directory);
 
                 // Never apply an old dialog's changes to a newly selected workspace.
                 if (api.lifecycle.signal.aborted || api.state.path.directory !== directory) return;
-                const result = await runAction(repository, action);
-                if (!api.lifecycle.signal.aborted && api.state.path.directory === directory) {
+                if (action === "setup") {
+                    api.ui.dialog.clear();
+                    await setup(repository);
+                    return;
+                }
+                if (action === "clear") {
+                    api.ui.dialog.clear();
+                    if (
+                        (await clear(repository)) === "back" &&
+                        api.state.path.directory === directory &&
+                        !api.lifecycle.signal.aborted
+                    )
+                        open();
+                    return;
+                }
+                const current = () =>
+                    !api.lifecycle.signal.aborted && api.state.path.directory === directory;
+                if (!repository.commonDir || action !== "status") api.ui.dialog.clear();
+                const result = await runWorkspaceAction(repository, action, dialogs(directory));
+                if (result !== undefined && current()) {
                     report(result);
                 }
             } catch (error) {

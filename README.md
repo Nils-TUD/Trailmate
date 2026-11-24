@@ -4,15 +4,28 @@ Automatic AI attribution for Git commits as a standalone OpenCode extension. The
 is to record models responsible for file-changing steps and add `Assisted-by: provider/model`
 trailers to prepared Git commit messages.
 
+Trailmate assumes one writer per worktree. Attribution is based on changes between snapshots, so
+overlapping tool calls or manual edits during an assistant step can credit the wrong model.
+
 When a repository is opened in the TUI, a native dialog offers:
 
-- **Enable:** install the Git-hook integration and remember decision.
-- **Disable:** remove Trailmate's hook integration, restore any existing prepare hook, and remember decision.
+- **Enable all:** install the Git-hook integration in the current repository and its initialized
+  submodules, recursively. Explicitly disabled children are left unchanged.
+- **Enable selectively:** choose the current repository and/or initialized submodules from a toggle list.
+- **Disable:** remove Trailmate's hook integration in the current repository, restore existing hooks,
+  and remember the decision. Child repositories are left unchanged.
+- **Scan for additional child repositories:** explicitly search the directory tree for other Git
+  repositories, then open the toggle list. This may take awhile and can be canceled.
 - **Later:** leave the preference unknown and ask next time the TUI starts.
 
 In addition, the plugin provides a TUI for status inspection and state management. Use `/trailmate`
 or the **Manage Trailmate** command-palette entry to open a native menu with the commands `status`,
-`enable`, `disable`, `list`, `clear`, and `toggle-auto-clear`.
+`setup`, `list`, `clear`, and `toggle-auto-clear`. Choose `setup` to reopen the initial setup dialog.
+
+If OpenCode opens in a directory outside Git, use `/trailmate` → `setup` to scan for Git
+repositories below it and choose which ones to enable. There is no startup scan or opt-in prompt,
+and no global discovery inventory. `status` and `clear` scan when opened; `list` and
+`toggle-auto-clear` scan and let you pick a child.
 
 Trailmate automatically clears the committing worktree's model list after each successful
 commit by default. Choose **toggle-auto-clear** to turn this off or back on. The setting applies repository-wide,
@@ -102,7 +115,7 @@ npm test
 
 ## Internals
 
-All plugin state is stored in one repository-wide JSON file outside the worktree:
+Each Git repository's preferences and attribution are stored in a JSON file outside the worktree:
 
 ```text
 <git-common-dir>/trailmate/settings.json

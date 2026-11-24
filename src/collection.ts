@@ -1,33 +1,36 @@
 import { discoverRepository, type Repository } from "./repository.js";
 import { addModel, readDecision } from "./settings.js";
+import path from "node:path";
+import { contains } from "./discovery.js";
+import { isRepository, type Workspace } from "./workspace.js";
 
 // Only the attribution data is shared; each host adapts its own SDK at the edge.
 export type AttributionMessage = { id: string; sessionID: string } & (
     | { role: "user" }
     | {
-          role: "assistant";
-          summary?: boolean;
-          path: { cwd: string };
-          providerID: string;
-          modelID: string;
-      }
+        role: "assistant";
+        summary?: boolean;
+        path: { cwd: string };
+        providerID: string;
+        modelID: string;
+    }
 );
 
 type CollectionEvent =
     | { type: "session.deleted"; properties: { info: { id: string } } }
     | { type: "message.updated"; properties: { info: AttributionMessage } }
     | {
-          type: "message.part.updated";
-          properties: {
-              part: {
-                  type: "patch";
-                  id: string;
-                  sessionID: string;
-                  messageID: string;
-                  files: string[];
-              };
-          };
-      };
+        type: "message.part.updated";
+        properties: {
+            part: {
+                type: "patch";
+                id: string;
+                sessionID: string;
+                messageID: string;
+                files: string[];
+            };
+        };
+    };
 
 interface Host {
     message(sessionID: string, messageID: string): Promise<AttributionMessage | undefined>;
@@ -40,9 +43,10 @@ interface Entry {
     info?: AttributionMessage;
     pending: boolean;
     seen: Set<string>;
+    files: Set<string>;
 }
 
-export function createCollector(repository: Repository, host: Host) {
+export function createCollector(repository: Workspace, host: Host) {
     const entries = new Map<string, Entry>();
     let queue = Promise.resolve();
     const warn = host.warn;
@@ -60,12 +64,38 @@ export function createCollector(repository: Repository, host: Host) {
                 const info = entry.info;
                 if (info.role === "assistant" && !info.summary) {
                     const source = await discoverRepository(info.path.cwd);
-                    if (source?.root === repository.root) {
-                        await addModel(repository, `${info.providerID}/${info.modelID}`);
+                    if (source && contains(repository.root, source.root)) {
+                        const targets = new Map<string, Repository>();
+                        for (const file of entry.files) {
+                            // Snapshot paths identify files, not repositories. In
+                            // particular, a gitlink-only change belongs to its
+                            // parent; do not infer edits inside the submodule.
+                            const absolute = path.resolve(info.path.cwd, file);
+                            if (!contains(repository.root, absolute)) continue;
+                            let directory = path.dirname(absolute);
+                            while (contains(repository.root, directory)) {
+                                const target = await discoverRepository(directory);
+                                if (target) {
+                                    if (contains(repository.root, target.root)) {
+                                        targets.set(target.root, target);
+                                    }
+                                    break;
+                                }
+                                const parent = path.dirname(directory);
+                                if (parent === directory) break;
+                                directory = parent;
+                            }
+                        }
+                        for (const target of targets.values()) {
+                            if ((await readDecision(target)) === "enabled") {
+                                await addModel(target, `${info.providerID}/${info.modelID}`);
+                            }
+                        }
                     }
                 }
 
                 entry.pending = false;
+                entry.files.clear();
             } catch (error) {
                 // Keep pending patches for the next event/tool boundary.
                 await warn(error);
@@ -79,6 +109,9 @@ export function createCollector(repository: Repository, host: Host) {
     };
 
     return {
+        message: async (sessionID: string, messageID: string) =>
+            entries.get(`${sessionID}/${messageID}`)?.info ??
+            (await host.message(sessionID, messageID)),
         flush: () => run(flush),
         event: (event: CollectionEvent) =>
             run(async () => {
@@ -94,6 +127,9 @@ export function createCollector(repository: Repository, host: Host) {
                 const info = event.type === "message.updated" ? event.properties.info : undefined;
                 const part =
                     event.type === "message.part.updated" ? event.properties.part : undefined;
+                // Containers have no parent snapshot; only the child tool hooks
+                // collect attribution there.
+                if (part && !isRepository(repository)) return;
                 if (part && (part.type !== "patch" || !part.files.length)) return;
 
                 const sessionID = info?.sessionID ?? part!.sessionID;
@@ -102,12 +138,13 @@ export function createCollector(repository: Repository, host: Host) {
                 let entry = entries.get(key);
 
                 if (!entry) {
-                    entry = { sessionID, messageID, pending: false, seen: new Set() };
+                    entry = { sessionID, messageID, pending: false, seen: new Set(), files: new Set() };
                     entries.set(key, entry);
                 }
                 if (info) entry.info = info;
                 if (part && !entry.seen.has(part.id)) {
-                    if ((await readDecision(repository)) === "enabled") entry.pending = true;
+                    entry.pending = true;
+                    for (const file of part.files) entry.files.add(file);
                     entry.seen.add(part.id);
                     if (entry.seen.size > 128) entry.seen.delete(entry.seen.values().next().value!);
                 }

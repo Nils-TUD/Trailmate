@@ -1,12 +1,12 @@
 import type { Plugin } from "@opencode/plugin";
 import { createCollector } from "./collection.js";
-import { discoverRepository } from "./repository.js";
+import { discoverWorkspace } from "./workspace.js";
+import { createChildChanges } from "./child-changes.js";
 
 export default {
     id: "trailmate",
     async setup(ctx) {
-        const repository = await discoverRepository(ctx.location.directory);
-        if (!repository) return;
+        const repository = await discoverWorkspace(ctx.location.directory);
 
         const collector = createCollector(repository, {
             message: async (sessionID, messageID) => {
@@ -28,7 +28,17 @@ export default {
             },
         });
 
-        await ctx.tool.hook("execute.before", () => collector.flush());
+        const childChanges = createChildChanges(repository, {
+            warn: async (error) => {
+                console.warn("Trailmate child attribution:", error);
+            },
+        });
+        await ctx.tool.hook("execute.before", async (event) => {
+            await collector.flush();
+            await childChanges.before(event, () => collector.message(event.sessionID, event.messageID));
+        });
+        // This hook also runs for failed tools that changed files before failing.
+        await ctx.tool.hook("execute.after", (event) => childChanges.after(event));
         const controller = new AbortController();
         const listen = async () => {
             for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
@@ -79,6 +89,7 @@ export default {
             controller.abort();
             await task;
             await collector.flush();
+            childChanges.clear();
         };
     },
 } satisfies Plugin.Plugin;

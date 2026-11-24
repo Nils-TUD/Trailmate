@@ -10,6 +10,13 @@ export type Settings = Record<string, unknown> & {
     version: 1;
     enabled: boolean | null;
     clearAfterCommit?: boolean;
+    setupComplete?: boolean;
+    // Discovery snapshot for status: parent worktree absolute path -> all child
+    // worktree absolute paths found during its last applied setup, including
+    // unchecked children. Setup rediscovers and replaces this list; entries may
+    // become stale. These paths are also discovery hints for child change
+    // detection; each child's own enabled setting still controls attribution.
+    children?: Record<string, string[]>;
     models: Record<string, string[]>;
     hooks?: { file: string }[];
 };
@@ -77,6 +84,22 @@ async function updateSettings(
 export async function readDecision(repository: Repository): Promise<Decision> {
     const { enabled } = await readSettings(repository);
     return enabled === null ? "unknown" : enabled ? "enabled" : "disabled";
+}
+
+export async function readSetupComplete(repository: Repository): Promise<boolean> {
+    return (await readSettings(repository)).setupComplete === true;
+}
+
+export async function markSetupComplete(repository: Repository, children: string[]): Promise<void> {
+    await updateSettings(repository, (settings) => {
+        settings.setupComplete = true;
+        settings.children ??= {};
+        settings.children[repository.root] = children.filter((root) => root !== repository.root);
+    });
+}
+
+export async function readChildren(repository: Repository): Promise<string[]> {
+    return (await readSettings(repository)).children?.[repository.root] ?? [];
 }
 
 export async function writeDecision(repository: Repository, enabled: boolean): Promise<void> {
